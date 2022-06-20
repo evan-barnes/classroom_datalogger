@@ -43,6 +43,8 @@ Things I'd like to add:
 
 
 #define FORCE_GPS_FIX true  //set to true for indoor testing (skips over the part where it waits for a fix)
+#define FORCE_RECORDING_STATE_SWITCH false   //switches the currentlyRecording flag every time the lock screen is entered so I can test that
+                                            //the state machine properly hands off to the correct UI page based on recording state
 
 
 //note that the TX and RX pins (0 and 1 respectively) are used for the GPS serial
@@ -96,22 +98,23 @@ enum displayButtons    //states for properly tracking and highlighting the butto
 {
     //thought it seemed simpler in long run to have these all be part of the same enum
     //buttons on the main page
-    setupSensors,   //highlight this button on display
-    startRecording, //highlight this button on display when in this substate of mainPage state
-    lockScreen,     //
-    goToSleep,       //unused, but saving this option for later if I can figure out how to make the mcu sleep
-    //buttons for the sensor setup page
+    setupSensors,   //main page left button
+    startRecording, //main page center button
+    lockScreen,     //main page right button
+    goToSleep,      //unused, but saving this option for later if I can figure out how to make the mcu sleep
+    back,           //reuse this for all the secondary pages
+    stopRecording,  //displayed on recording screen
+    unlockScreen    //displayed on lock screen
+};
+
+enum sensorSetupToggles     //used for showing a list of sensors that will be enabled or disabled for recording
+{
+    //I wanted to move this out of the main displayButtons enum to keep more organized. Plus these will be formatted differently.
     gpsToggle,
     barometerToggle,
     tempToggle,
     imuToggle,
     uvToggle,
-    back,           //reuse this for all the secondary pages
-    //buttons for the recording page
-    stopRecording,
-        //reuse the lockScreen value from above here as well
-    //buttons for the lock page
-    unlockScreen
 };
 
 //going to need other button enums for each page
@@ -137,31 +140,14 @@ enum navButton      //going to use the ANO nav wheel, but leave out the encoder 
 //Actually a python-like dictionary would be better for that because then I could have dict{sensorName:enabledStatus; etc}.
 //Does C/++ have equivalent structure? Oh, is that a struct?
 
+//create the labels and arrays of button objects for each UI page
+char mainPageButtonLabels[3][7] = {"Setup", "Record", "Lock"};  //The [7] is because each of these labels is an array of chars, not a string like I'm used to from Python
+Adafruit_GFX_Button mainPageButtons[3];                         //the actual array of buttons for the main page
+char recordingPageButtonLabels[2][5] = {"Stop", "Lock"};
+Adafruit_GFX_Button recordingPageButtons[2];
+Adafruit_GFX_Button backButton;         //just a single button object that I'll reuse for all back buttons. Keeps them at consistent position across UI if I do this.
+Adafruit_GFX_Button unlockButton;       //eventually want this to operate on long press, not single click
 
-
-
-//utility function for drawing rounded rectangle buttons
-//may need to change this so that button width and height isn't hard-coded
-void drawRoundRectTextButton(int16_t x0, int16_t y0, bool filled, String text)
-{
-    if (filled) //filled will show button selected
-    {
-        //draw a filled round rect
-        display.fillRoundRect(x0, y0, mainButtonWidth, mainButtonHeight, roundRectCornerRad, BLACK);
-        //add the text on the button later
-        display.setTextColor(WHITE);
-    }
-    else //draw an unfilled round rect to indicate unselected
-    {
-        display.drawRoundRect(x0, y0, mainButtonWidth, mainButtonHeight, roundRectCornerRad, BLACK);
-        //add button text later
-        display.setTextColor(BLACK);
-    }
-
-    display.setCursor(x0 + 10, y0 + 10);
-    display.setTextSize(3);
-    display.println(text);
-}
 
 //the main page of the display when not recording.
 //have a different function track nav button presses and tell this function which button to  hightlight.
@@ -171,9 +157,6 @@ displayButtons drawMainPage(bool initialClear, bool refresh, displayButtons sele
     if (initialClear) display.clearDisplay();
     //Want three menu options: Setup, Begin Recording, Lock Screen.
     //I think I'll have those three buttons along the bottom, with a window at the top for displaying useful data (altitude, time, temp, gps fix state, etc)
-    
-    int buttonXCoords[3] = {mainButtonMargin, 2*mainButtonMargin + mainButtonWidth, 3*mainButtonMargin + 2*mainButtonWidth};
-    int buttonYCoords = display.height() - mainButtonMargin - mainButtonHeight;
 
     display.setCursor(80,20);
     display.setTextSize(4);
@@ -184,21 +167,21 @@ displayButtons drawMainPage(bool initialClear, bool refresh, displayButtons sele
     {
         case setupSensors:
             //highlight sensors button
-            drawRoundRectTextButton(buttonXCoords[0], buttonYCoords, true, String("Setup"));
-            drawRoundRectTextButton(buttonXCoords[1], buttonYCoords, false, String("Record"));
-            drawRoundRectTextButton(buttonXCoords[2], buttonYCoords, false, String("Lock"));
+            mainPageButtons[0].drawButton(true);    //highlight selected button (setup)
+            mainPageButtons[1].drawButton(false);
+            mainPageButtons[2].drawButton(false);
             break;
         case startRecording:
             //highlight start recording button
-            drawRoundRectTextButton(buttonXCoords[0], buttonYCoords, false, String("Setup"));
-            drawRoundRectTextButton(buttonXCoords[1], buttonYCoords, true, String("Record"));
-            drawRoundRectTextButton(buttonXCoords[2], buttonYCoords, false, String("Lock"));
+            mainPageButtons[0].drawButton(false);    
+            mainPageButtons[1].drawButton(true);    //highlight selected button (record)
+            mainPageButtons[2].drawButton(false);
             break;
         case lockScreen:
             //highlight lock screen button
-            drawRoundRectTextButton(buttonXCoords[0], buttonYCoords, false, String("Setup"));
-            drawRoundRectTextButton(buttonXCoords[1], buttonYCoords, false, String("Record"));
-            drawRoundRectTextButton(buttonXCoords[2], buttonYCoords, true, String("Lock"));
+            mainPageButtons[0].drawButton(false);    
+            mainPageButtons[1].drawButton(false);
+            mainPageButtons[2].drawButton(true);    //highlight selected button (lock)
             break;
     }
 
@@ -220,7 +203,7 @@ displayButtons drawSensorSetupPage(bool initialClear, bool refresh, displayButto
     switch (selectedButton)
     {
     case back:
-        drawRoundRectTextButton(3*mainButtonMargin + 2*mainButtonWidth, display.height() - mainButtonMargin - mainButtonHeight, true, String("Back"));
+        backButton.drawButton(true); //draw highlighted. It's the default button to be selected when going to this page
         break;
     }
     if (refresh) display.refresh();
@@ -230,11 +213,27 @@ displayButtons drawSensorSetupPage(bool initialClear, bool refresh, displayButto
 displayButtons drawRecordingPage(bool initialClear, bool refresh, displayButtons selectedButton)
 {
     //placeholder 
+    //UI buttons: stop recording, lock screen
+    
+
     if (initialClear) display.clearDisplay();
     display.setCursor(20,20);
     display.setTextSize(3);
     display.setTextColor(BLACK);
     display.println("Recording Test Page");
+
+    switch (selectedButton)
+    {
+        case stopRecording:
+            recordingPageButtons[0].drawButton(true);   //draw the "stop recording button" inverted to show it's selected
+            recordingPageButtons[1].drawButton(false);
+            break;
+        case lockScreen:
+            recordingPageButtons[0].drawButton(false);
+            recordingPageButtons[1].drawButton(true);   //draw the lock screen button inverted
+            break;
+    }
+
     if (refresh) display.refresh();
     return selectedButton;
 }
@@ -248,6 +247,9 @@ displayButtons drawLockPage(bool initialClear, bool refresh, displayButtons sele
     display.setTextSize(3);
     display.setTextColor(BLACK);
     display.println("Lock Test Page");
+
+    unlockButton.drawButton(true);      //only the unlock button is available, so always draw it, always highlight
+
     if (refresh) display.refresh();
     return selectedButton;
 }
@@ -273,9 +275,12 @@ void updateNavButtons(void)
     buttonUp.tick();
 }
 
-masterUIState currentUIPage = mainPage;   //initialize the UI state to the main page, since this is restart/boot
-displayButtons displayButtonSelection = setupSensors; //initialize button highlighting/tracking to sensor setup button on main page for boot
-navButton navigationButton = noPress; //initialize state of button presses to none pressed. 
+
+//flags for tracking the main states of the system and the UI
+masterUIState currentUIPage = mainPage;                 //initialize the UI state to the main page, since this is restart/boot
+displayButtons displayButtonSelection = setupSensors;   //initialize button highlighting/tracking to sensor setup button on main page for boot
+navButton navigationButton = noPress;                   //initialize state of button presses to none pressed. 
+bool currentlyRecording = false;                        //set to true when recording is started, set to false when stopped.
 
 void UIStateManager(void)
 {
@@ -311,6 +316,7 @@ void UIStateManager(void)
                     else if (navigationButton == centerSingleClick)
                     {
                         currentUIPage = recordingPage;
+                        currentlyRecording = true;  //set the currently recording flag to true to indicate to rest of program to start recording
                         displayButtonSelection = drawRecordingPage(true, true, lockScreen);
                     }
                     break;
@@ -342,9 +348,43 @@ void UIStateManager(void)
             navigationButton = noPress;     //if I forget this line, the menu immediately jumps back to the page I was trying to leave.
             break;
         case recordingPage:
+            switch (displayButtonSelection)
+            {
+                case stopRecording:
+                    if (navigationButton == rightSingleClick || navigationButton == leftSingleClick) displayButtonSelection = drawRecordingPage(true, true, lockScreen);
+                    else if (navigationButton == centerSingleClick) 
+                    {
+                        currentUIPage = mainPage;
+                        currentlyRecording = false;     //set the currentlyRecording flag to false to indicated to rest of program to stop record
+                        displayButtonSelection = drawMainPage(true, true, setupSensors);
+                    }
+                    break;
+                case lockScreen:
+                    if (navigationButton == rightSingleClick || navigationButton == leftSingleClick) displayButtonSelection = drawRecordingPage(true, true, stopRecording);
+                    else if (navigationButton == centerSingleClick) 
+                    {
+                        currentUIPage = lockPage;
+                        displayButtonSelection = drawLockPage(true, true, unlockScreen);
+                    }    
+                    break;
+            }
             navigationButton = noPress;
             break;
         case lockPage:
+            if (navigationButton == centerSingleClick)
+            {
+                if (currentlyRecording)     //if recording data, return to the recording page from the lock screen
+                {
+                    currentUIPage = recordingPage;
+                    displayButtonSelection = drawRecordingPage(true, true, lockScreen);
+                }
+                else                        //if not recording, return to main menu
+                {
+                    currentUIPage = mainPage;   
+                    displayButtonSelection = drawMainPage(true, true, setupSensors);
+                }
+                if (FORCE_RECORDING_STATE_SWITCH) currentlyRecording = !currentlyRecording;
+            }
             navigationButton = noPress;
             break;
     }
@@ -369,6 +409,31 @@ void setup()
     buttonRight.attachClick([]() {navigationButton = rightSingleClick;});
     buttonUp.attachClick([]() {navigationButton = upSingleClick;});
     buttonDown.attachClick([]() {navigationButton = downSingleClick;});
+
+    //initialize the UI buttons
+    //hardcoding some positions for the recording page buttons as a test on the recording page.
+    //may just keep hardcoding for now. the UI layout won't change so frequently that it's worth making a more flexible system
+    recordingPageButtons[0].initButtonUL(&display, mainButtonMargin, display.height() - mainButtonMargin - mainButtonHeight, mainButtonWidth, 
+                                            mainButtonHeight, BLACK, WHITE, BLACK, recordingPageButtonLabels[0], 3);
+    recordingPageButtons[1].initButtonUL(&display, 3*mainButtonMargin + 2*mainButtonWidth, display.height() - mainButtonMargin - mainButtonHeight,
+                                            mainButtonWidth, mainButtonHeight, BLACK, WHITE, BLACK, recordingPageButtonLabels[1], 3);
+
+    for (int i = 0; i < 3; i++) //initialize the main page UI buttons. For loop made more sense here
+    {
+        mainPageButtons[i].initButtonUL(&display, mainButtonMargin + i*mainButtonMargin + i*mainButtonWidth, display.height() - mainButtonMargin - mainButtonHeight,
+                                        mainButtonWidth, mainButtonHeight, BLACK, WHITE, BLACK, mainPageButtonLabels[i], 3);
+    }
+
+    backButton.initButtonUL(&display, 3*mainButtonMargin + 2*mainButtonWidth, display.height() - mainButtonMargin - mainButtonHeight, 
+                            mainButtonWidth, mainButtonHeight, BLACK, WHITE, BLACK, "Back", 3);
+    unlockButton.initButtonUL(&display, 3*mainButtonMargin + 2*mainButtonWidth, display.height() - mainButtonMargin - mainButtonHeight, 
+                            mainButtonWidth, mainButtonHeight, BLACK, WHITE, BLACK, "Unlock", 3);
+
+    /*  button coordinates for reference
+    int buttonXCoords[3] = {mainButtonMargin, 2*mainButtonMargin + mainButtonWidth, 3*mainButtonMargin + 2*mainButtonWidth};
+    int buttonYCoords = display.height() - mainButtonMargin - mainButtonHeight;
+    */
+
 
     //start the neopixel
     indicator.begin();

@@ -1,0 +1,93 @@
+#include <Arduino.h>
+#include <OneButton.h>
+
+#define PIN_BUTTON_LEFT     19  //switching from pin 13 fixed my problems! Pin 13 shares the builtin led, so maybe using it as input was problem.
+#define PIN_BUTTON_RIGHT    11
+#define PIN_BUTTON_UP       12
+#define PIN_BUTTON_DOWN     10
+#define PIN_BUTTON_CENTER   2
+
+OneButton buttonLeft = OneButton(PIN_BUTTON_LEFT, true, true);
+OneButton buttonRight = OneButton(PIN_BUTTON_RIGHT, true, true);
+OneButton buttonCenter = OneButton(PIN_BUTTON_CENTER, true, true);
+OneButton buttonUp = OneButton(PIN_BUTTON_UP, true, true);
+OneButton buttonDown = OneButton(PIN_BUTTON_DOWN, true, true);
+
+//state flags for single clicks of nav buttons. can also add double and long press flags later if I need.
+bool leftSingle = false;
+bool rightSingle = false;
+bool centerSingle = false;
+bool upSingle = false;
+bool downSingle = false;
+
+void updateNavButtons(void)
+{
+    //Call this function every time through main loop to update the button states and check for presses.
+    //Enables me to set a single flag (defined below as the navigationButton variable) to track button presses.
+    //Be sure to reset the flag to noPress after each use.
+    //Doesn't even have to return a value, that's done by the attachClick method in the Setup().
+    //Just using this to consolidate all the button.tick() calls.
+    buttonLeft.tick();
+    buttonCenter.tick();
+    buttonRight.tick();
+    buttonDown.tick();
+    buttonUp.tick();
+}
+
+//update timer for occassionally printing that no buttons are pressed
+unsigned long updateTimer = millis();
+
+void setup()
+{
+    /*
+    //initialize the nav buttons to be in pullup resistor mode.
+    //note that this example was for raw input, no debouncing or button handling libraries.
+    pinMode(BUTTON_LEFT, INPUT_PULLUP);     //pin 13 seems to  not have an internal pullup resistor? added external 10k and that fixed it.
+    //actually I think that adding an external pullup puts that resistor in parallel with the internal, which should drop the total
+    //resistance of the pullup. According to the NRF52840 datasheet, the internal pullups are something like 13k ohm, and adding a 10k in parallel
+    //would make that total resistance 5.6k. Maybe the internal pullup was too weak. Why just for that button though? Others are fine.
+    pinMode(BUTTON_RIGHT, INPUT_PULLUP);
+    pinMode(BUTTON_CENTER, INPUT_PULLUP);
+    pinMode(BUTTON_UP, INPUT_PULLUP);
+    pinMode(BUTTON_DOWN, INPUT_PULLUP);
+    */
+
+    //attach the functions called by a single click of each button.
+    //note that I have to reset the value of the flag to false elsewhere in the code after it has been read and used appropriately.
+    buttonLeft.attachClick([]() {leftSingle = true;});      //Lambda function! 
+    buttonCenter.attachClick([]() {centerSingle = true;});
+    buttonRight.attachClick([]() {rightSingle = true;});
+    buttonUp.attachClick([]() {upSingle = true;});
+    buttonDown.attachClick([]() {downSingle = true;});
+
+    //start serial monitor
+    Serial.begin(115200);
+}
+
+void loop()
+{
+    /*
+    //again, this was all for raw input of buttons, not using debounce or button libraries
+    if (! digitalRead(BUTTON_LEFT)) Serial.println("LEFT");
+    if (! digitalRead(BUTTON_CENTER)) Serial.println("CENTER");
+    if (! digitalRead(BUTTON_RIGHT)) Serial.println("RIGHT");
+    if (! digitalRead(BUTTON_UP)) Serial.println("UP");
+    if (! digitalRead(BUTTON_DOWN)) Serial.println("DOWN");
+    
+    */
+    
+    //update the button states by calling the .tick() function of OneButton for each button
+    updateNavButtons();
+    //report detected presses and reset the flags to false if detected.
+    if (leftSingle) {Serial.println("left single"); leftSingle = false;}
+    if (rightSingle) {Serial.println("right single"); rightSingle = false;}
+    if (centerSingle) {Serial.println("center single"); centerSingle = false;}
+    if (upSingle) {Serial.println("up single"); upSingle = false;}
+    if (downSingle) {Serial.println("down single"); downSingle = false;}
+    //if no buttons are pressed, say so every 1/4 second
+    if (updateTimer + 250 <= millis())
+    {
+        Serial.println("NONE");
+        updateTimer = millis();
+    }
+}

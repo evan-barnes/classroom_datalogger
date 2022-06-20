@@ -12,6 +12,31 @@ Things I'd like to add:
     automatically enabled next time I boot up the system. Not sure how to save that kind of state yet.
 */
 
+/*
+Reference info about the Feather Sense board, like built-in sensor addresses
+
+gyro/accelerometer          i2c: 0x6A, with an IRQ on digital pin 3
+magnetometer                i2c: 0x1C
+light/gesture/proximity     i2c: 0x39, with an IRQ on digital pin 36
+humidity                    i2c: 0x44
+temp/pressure               i2c: 0x77
+pdm mic                     data on d34, clock on d35
+*/
+
+/*
+possible external sensors
+
+particulate matter adafruit pmsa003l        i2c: 0x12
+UV sensor                                   analog
+Geiger counter!                             https://www.dfrobot.com/product-2547.html
+total dissolved solids                      https://www.dfrobot.com/product-1662.html
+turbidity                                   https://www.dfrobot.com/product-1394.html
+water temp                                  https://www.dfrobot.com/product-1354.html
+*/
+
+
+
+
 #include <Arduino.h>
 #include <Adafruit_GPS.h>
 #include <Adafruit_NeoPixel.h>
@@ -111,10 +136,13 @@ enum sensorSetupToggles     //used for showing a list of sensors that will be en
 {
     //I wanted to move this out of the main displayButtons enum to keep more organized. Plus these will be formatted differently.
     gpsToggle,
-    barometerToggle,
+    baroToggle,
     tempToggle,
     imuToggle,
     uvToggle,
+    humidityToggle,
+    tdsToggle,      //total dissolved solids
+    pmToggle        //particulate matter air sensor toggle
 };
 
 //going to need other button enums for each page
@@ -133,7 +161,8 @@ enum navButton      //going to use the ANO nav wheel, but leave out the encoder 
     rightSingleClick,          //pass these to functions to control how the display functions react
     upSingleClick,             //currently all for Single Click. Can make another group of these within the enum for double clicks and long press
     downSingleClick,
-    centerSingleClick
+    centerSingleClick,
+    centerLongPress
 };
 
 //going to need some system state flags as well, I think, like one for tracking which sensors are enabled.
@@ -371,7 +400,7 @@ void UIStateManager(void)
             navigationButton = noPress;
             break;
         case lockPage:
-            if (navigationButton == centerSingleClick)
+            if (navigationButton == centerLongPress)
             {
                 if (currentlyRecording)     //if recording data, return to the recording page from the lock screen
                 {
@@ -406,6 +435,8 @@ void setup()
     //attach the proper functions to the navigation buttons
     buttonLeft.attachClick([]() {navigationButton = leftSingleClick;});      //Lambda function! 
     buttonCenter.attachClick([]() {navigationButton = centerSingleClick;});
+    buttonCenter.attachLongPressStart([]() {navigationButton = centerLongPress;});  //long press for unlocking screen
+    buttonCenter.setPressTicks(1600);   //set to 1.6 seconds for long press
     buttonRight.attachClick([]() {navigationButton = rightSingleClick;});
     buttonUp.attachClick([]() {navigationButton = upSingleClick;});
     buttonDown.attachClick([]() {navigationButton = downSingleClick;});

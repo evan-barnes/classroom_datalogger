@@ -2,7 +2,8 @@
 To do:
 --I still need to attach the interrupts to the navigation buttons, and set up the interrupt service routines. Also the flags or state trackers that 
     will keep track of button state. I've only defined the pins and set them as inputs with pullups.
-
+--adafruit gfx library has a button class. switch to using that for the UI, rather than creating my own. I think it will ultimately be simpler.
+    It has a built in text label component, which means I don't have to figure that out on my own.
 
 
 
@@ -104,6 +105,7 @@ enum displayButtons    //states for properly tracking and highlighting the butto
     barometerToggle,
     tempToggle,
     imuToggle,
+    uvToggle,
     back,           //reuse this for all the secondary pages
     //buttons for the recording page
     stopRecording,
@@ -140,19 +142,25 @@ enum navButton      //going to use the ANO nav wheel, but leave out the encoder 
 
 //utility function for drawing rounded rectangle buttons
 //may need to change this so that button width and height isn't hard-coded
-void drawRoundRectButton(int16_t x0, int16_t y0, bool filled, String text)
+void drawRoundRectTextButton(int16_t x0, int16_t y0, bool filled, String text)
 {
     if (filled) //filled will show button selected
     {
         //draw a filled round rect
         display.fillRoundRect(x0, y0, mainButtonWidth, mainButtonHeight, roundRectCornerRad, BLACK);
         //add the text on the button later
+        display.setTextColor(WHITE);
     }
     else //draw an unfilled round rect to indicate unselected
     {
         display.drawRoundRect(x0, y0, mainButtonWidth, mainButtonHeight, roundRectCornerRad, BLACK);
         //add button text later
+        display.setTextColor(BLACK);
     }
+
+    display.setCursor(x0 + 10, y0 + 10);
+    display.setTextSize(3);
+    display.println(text);
 }
 
 //the main page of the display when not recording.
@@ -176,21 +184,21 @@ displayButtons drawMainPage(bool initialClear, bool refresh, displayButtons sele
     {
         case setupSensors:
             //highlight sensors button
-            drawRoundRectButton(buttonXCoords[0], buttonYCoords, true, String("Setup"));
-            drawRoundRectButton(buttonXCoords[1], buttonYCoords, false, String("Record"));
-            drawRoundRectButton(buttonXCoords[2], buttonYCoords, false, String("Lock Screen"));
+            drawRoundRectTextButton(buttonXCoords[0], buttonYCoords, true, String("Setup"));
+            drawRoundRectTextButton(buttonXCoords[1], buttonYCoords, false, String("Record"));
+            drawRoundRectTextButton(buttonXCoords[2], buttonYCoords, false, String("Lock"));
             break;
         case startRecording:
             //highlight start recording button
-            drawRoundRectButton(buttonXCoords[0], buttonYCoords, false, String("Setup"));
-            drawRoundRectButton(buttonXCoords[1], buttonYCoords, true, String("Record"));
-            drawRoundRectButton(buttonXCoords[2], buttonYCoords, false, String("Lock Screen"));
+            drawRoundRectTextButton(buttonXCoords[0], buttonYCoords, false, String("Setup"));
+            drawRoundRectTextButton(buttonXCoords[1], buttonYCoords, true, String("Record"));
+            drawRoundRectTextButton(buttonXCoords[2], buttonYCoords, false, String("Lock"));
             break;
         case lockScreen:
             //highlight lock screen button
-            drawRoundRectButton(buttonXCoords[0], buttonYCoords, false, String("Setup"));
-            drawRoundRectButton(buttonXCoords[1], buttonYCoords, false, String("Record"));
-            drawRoundRectButton(buttonXCoords[2], buttonYCoords, true, String("Lock Screen"));
+            drawRoundRectTextButton(buttonXCoords[0], buttonYCoords, false, String("Setup"));
+            drawRoundRectTextButton(buttonXCoords[1], buttonYCoords, false, String("Record"));
+            drawRoundRectTextButton(buttonXCoords[2], buttonYCoords, true, String("Lock"));
             break;
     }
 
@@ -198,15 +206,25 @@ displayButtons drawMainPage(bool initialClear, bool refresh, displayButtons sele
     return selectedButton;
 }
 
+
+
 displayButtons drawSensorSetupPage(bool initialClear, bool refresh, displayButtons selectedButton)
 {
     //placeholder 
     if (initialClear) display.clearDisplay();
     display.setCursor(20,20);
-    display.setTextSize(3);
+    display.setTextSize(4);
     display.setTextColor(BLACK);
-    display.println("Sensor Setup Test Page");
+    display.println("Setup Test Page");
+
+    switch (selectedButton)
+    {
+    case back:
+        drawRoundRectTextButton(3*mainButtonMargin + 2*mainButtonWidth, display.height() - mainButtonMargin - mainButtonHeight, true, String("Back"));
+        break;
+    }
     if (refresh) display.refresh();
+    return selectedButton;
 }
 
 displayButtons drawRecordingPage(bool initialClear, bool refresh, displayButtons selectedButton)
@@ -218,6 +236,7 @@ displayButtons drawRecordingPage(bool initialClear, bool refresh, displayButtons
     display.setTextColor(BLACK);
     display.println("Recording Test Page");
     if (refresh) display.refresh();
+    return selectedButton;
 }
 
 
@@ -228,8 +247,9 @@ displayButtons drawLockPage(bool initialClear, bool refresh, displayButtons sele
     display.setCursor(20,20);
     display.setTextSize(3);
     display.setTextColor(BLACK);
-    display.println("Lock Screen Test Page");
+    display.println("Lock Test Page");
     if (refresh) display.refresh();
+    return selectedButton;
 }
 
 //initialize the button objects for navigation buttons
@@ -281,7 +301,7 @@ void UIStateManager(void)
                     else if (navigationButton == centerSingleClick) //change master page to the sensor setup page
                     {
                         currentUIPage = setupPage;
-                        displayButtonSelection = drawSensorSetupPage(true, true, gpsToggle);
+                        displayButtonSelection = drawSensorSetupPage(true, true, back);
                     }
                     else if (navigationButton == leftSingleClick) displayButtonSelection = drawMainPage(true, true, lockScreen);
                     break;
@@ -308,12 +328,24 @@ void UIStateManager(void)
             navigationButton = noPress; //once I've made it here, changes have been made to the UI. reset the navigationButton flag
             break;
         case setupPage:
+            //temporary code. just want to see the back button work.
+            switch (displayButtonSelection)
+            {
+                case back:      //if the back button is highlighted
+                    if (navigationButton == centerSingleClick)
+                    {
+                        currentUIPage = mainPage;
+                        displayButtonSelection = drawMainPage(true, true, setupSensors);
+                    }
+                    break;
+            }
+            navigationButton = noPress;     //if I forget this line, the menu immediately jumps back to the page I was trying to leave.
             break;
         case recordingPage:
+            navigationButton = noPress;
             break;
         case lockPage:
-            break;
-        default:
+            navigationButton = noPress;
             break;
     }
 }

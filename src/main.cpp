@@ -406,7 +406,11 @@ displayButtons drawSensorSetupPage(bool initialClear, bool refresh, displayButto
     }
     else
     {
-        
+        drawSensorSetupButtons(selectedButton);         //draw the highlighted sensor button
+        backButton.drawButton(false);                   
+        if (recordMode == recordingSteady) recordSteadyButton.drawButton(false);
+        else recordBurstButton.drawButton(false);
+
     }
     
     if (refresh) display.refresh();
@@ -544,9 +548,11 @@ void UIStateManager(void)
                     }
                     else if (navigationButton == downSingleClick || navigationButton == upSingleClick)
                     {
-                        currentUIPage = setupPage;
+                        //currentUIPage = setupPage;
                         displayButtonSelection = drawSensorSetupPage(true, true, selectRecordMode);
                     }
+                    else if (navigationButton == leftSingleClick) displayButtonSelection = drawSensorSetupPage(true, true, waterTempSetupUIButton);
+                    else if (navigationButton == rightSingleClick) displayButtonSelection = drawSensorSetupPage(true, true, altimeterSetupUIButton);
                     break;
                 case selectRecordMode:
                     if (navigationButton == downSingleClick || navigationButton == upSingleClick)
@@ -561,28 +567,129 @@ void UIStateManager(void)
                         else if (recordMode == recordingBurst) recordMode = recordingSteady;
                         displayButtonSelection = drawSensorSetupPage(true, true, selectRecordMode);
                     }
+                    else if (navigationButton == rightSingleClick) displayButtonSelection = drawSensorSetupPage(true, true, humiditySetupUIButton);
+                    else if (navigationButton == leftSingleClick) displayButtonSelection = drawSensorSetupPage(true, true, imuSetupUIButton);
                     break;
                 case gpsSetupUIButton:
+                    if (navigationButton == centerSingleClick) 
+                    {
+                        sensors.GPS = !sensors.GPS; //switch enabled state of the GPS sensor enable flag
+                        displayButtonSelection = drawSensorSetupPage(true, true, gpsSetupUIButton);  
+                    }
+                    else if (navigationButton == rightSingleClick) displayButtonSelection = drawSensorSetupPage(true, true, particulateSetupUIButton);
+                    else if (navigationButton == leftSingleClick) displayButtonSelection = drawSensorSetupPage(true, true, selectRecordMode);
+                    else if (navigationButton == upSingleClick) displayButtonSelection = drawSensorSetupPage(true, true, uvSetupUIButton);
+                    else if (navigationButton == downSingleClick) displayButtonSelection = drawSensorSetupPage(true, true, humiditySetupUIButton);
                     break;
                 case imuSetupUIButton:
+                    if (navigationButton == centerSingleClick) 
+                    {
+                        sensors.IMU = !sensors.IMU; //switch enabled state of the GPS sensor enable flag
+                        displayButtonSelection = drawSensorSetupPage(true, true, imuSetupUIButton);  
+                    }
+                    else if (navigationButton == rightSingleClick) displayButtonSelection = drawSensorSetupPage(true, true, selectRecordMode);
+                    else if (navigationButton == leftSingleClick) displayButtonSelection = drawSensorSetupPage(true, true, humiditySetupUIButton);
+                    else if (navigationButton == upSingleClick) displayButtonSelection = drawSensorSetupPage(true, true, particulateSetupUIButton);
+                    else if (navigationButton == downSingleClick) displayButtonSelection = drawSensorSetupPage(true, true, tdsSetupUIButton);
                     break;
                 case humiditySetupUIButton:
+                    if (navigationButton == centerSingleClick) 
+                    {
+                        sensors.humidity = !sensors.humidity; //switch enabled state of the GPS sensor enable flag
+                        displayButtonSelection = drawSensorSetupPage(true, true, humiditySetupUIButton);  
+                    }
+                    else if (navigationButton == rightSingleClick) displayButtonSelection = drawSensorSetupPage(true, true, imuSetupUIButton);
+                    else if (navigationButton == leftSingleClick) displayButtonSelection = drawSensorSetupPage(true, true, selectRecordMode);
+                    else if (navigationButton == upSingleClick) displayButtonSelection = drawSensorSetupPage(true, true, gpsSetupUIButton);
+                    else if (navigationButton == downSingleClick) displayButtonSelection = drawSensorSetupPage(true, true, barometerSetupUIButton);
                     break;
                 case barometerSetupUIButton:
+                    if (navigationButton == centerSingleClick) 
+                    {
+                        sensors.barometer = !sensors.barometer; //switch enabled state of the GPS sensor enable flag
+                        displayButtonSelection = drawSensorSetupPage(true, true, barometerSetupUIButton);  
+                    }
+                    else if (navigationButton == rightSingleClick) displayButtonSelection = drawSensorSetupPage(true, true, tdsSetupUIButton);
+                    else if (navigationButton == leftSingleClick) displayButtonSelection = drawSensorSetupPage(true, true, selectRecordMode);
+                    else if (navigationButton == upSingleClick) displayButtonSelection = drawSensorSetupPage(true, true, humiditySetupUIButton);
+                    else if (navigationButton == downSingleClick) displayButtonSelection = drawSensorSetupPage(true, true, tempSetupUIButton);
                     break;
                 case tempSetupUIButton:
+                    if (navigationButton == centerSingleClick) 
+                    {
+                        sensors.temp = !sensors.temp; //switch enabled state of the GPS sensor enable flag
+                        displayButtonSelection = drawSensorSetupPage(true, true, tempSetupUIButton);  
+                    }
+                    else if (navigationButton == rightSingleClick) displayButtonSelection = drawSensorSetupPage(true, true, turbiditySetupUIButton);
+                    else if (navigationButton == leftSingleClick) displayButtonSelection = drawSensorSetupPage(true, true, back);
+                    else if (navigationButton == upSingleClick) displayButtonSelection = drawSensorSetupPage(true, true, barometerSetupUIButton);
+                    else if (navigationButton == downSingleClick) displayButtonSelection = drawSensorSetupPage(true, true, altimeterSetupUIButton);
                     break;
-                case altimeterSetupUIButton:
+                case altimeterSetupUIButton:    //should be finished with all five buttons here.
+                    if (navigationButton == centerSingleClick)
+                    {
+                        sensors.altimeter = !sensors.altimeter;
+                        displayButtonSelection = drawSensorSetupPage(true, true, altimeterSetupUIButton);
+                    }
+                    else if (navigationButton == rightSingleClick) displayButtonSelection = drawSensorSetupPage(true, true, waterTempSetupUIButton);
+                    else if (navigationButton == leftSingleClick) displayButtonSelection = drawSensorSetupPage(true, true, back);
+                    else if (navigationButton == upSingleClick) displayButtonSelection = drawSensorSetupPage(true, true, tempSetupUIButton);
+                    else if (navigationButton == downSingleClick) displayButtonSelection = drawSensorSetupPage(true, true, uvSetupUIButton);
                     break;
                 case uvSetupUIButton:
+                    if (navigationButton == centerSingleClick) 
+                    {
+                        sensors.UV = !sensors.UV; //switch enabled state of the GPS sensor enable flag
+                        displayButtonSelection = drawSensorSetupPage(true, true, uvSetupUIButton);  
+                    }
+                    else if (navigationButton == rightSingleClick) displayButtonSelection = drawSensorSetupPage(true, true, waterTempSetupUIButton);
+                    else if (navigationButton == leftSingleClick) displayButtonSelection = drawSensorSetupPage(true, true, back);
+                    else if (navigationButton == upSingleClick) displayButtonSelection = drawSensorSetupPage(true, true, altimeterSetupUIButton);
+                    else if (navigationButton == downSingleClick) displayButtonSelection = drawSensorSetupPage(true, true, gpsSetupUIButton);
                     break;
                 case particulateSetupUIButton:
+                    if (navigationButton == centerSingleClick) 
+                    {
+                        sensors.particulate = !sensors.particulate; //switch enabled state of the GPS sensor enable flag
+                        displayButtonSelection = drawSensorSetupPage(true, true, particulateSetupUIButton);  
+                    }
+                    else if (navigationButton == rightSingleClick) displayButtonSelection = drawSensorSetupPage(true, true, selectRecordMode);
+                    else if (navigationButton == leftSingleClick) displayButtonSelection = drawSensorSetupPage(true, true, gpsSetupUIButton);
+                    else if (navigationButton == upSingleClick) displayButtonSelection = drawSensorSetupPage(true, true, waterTempSetupUIButton);
+                    else if (navigationButton == downSingleClick) displayButtonSelection = drawSensorSetupPage(true, true, imuSetupUIButton);
                     break;
                 case tdsSetupUIButton:
+                    if (navigationButton == centerSingleClick) 
+                    {
+                        sensors.TDS = !sensors.TDS; //switch enabled state of the GPS sensor enable flag
+                        displayButtonSelection = drawSensorSetupPage(true, true, tdsSetupUIButton);  
+                    }
+                    else if (navigationButton == rightSingleClick) displayButtonSelection = drawSensorSetupPage(true, true, selectRecordMode);
+                    else if (navigationButton == leftSingleClick) displayButtonSelection = drawSensorSetupPage(true, true, barometerSetupUIButton);
+                    else if (navigationButton == upSingleClick) displayButtonSelection = drawSensorSetupPage(true, true, imuSetupUIButton);
+                    else if (navigationButton == downSingleClick) displayButtonSelection = drawSensorSetupPage(true, true, turbiditySetupUIButton);
                     break;
                 case turbiditySetupUIButton:
+                    if (navigationButton == centerSingleClick) 
+                    {
+                        sensors.turbidity = !sensors.turbidity; //switch enabled state of the GPS sensor enable flag
+                        displayButtonSelection = drawSensorSetupPage(true, true, turbiditySetupUIButton);  
+                    }
+                    else if (navigationButton == rightSingleClick) displayButtonSelection = drawSensorSetupPage(true, true, back);
+                    else if (navigationButton == leftSingleClick) displayButtonSelection = drawSensorSetupPage(true, true, tempSetupUIButton);
+                    else if (navigationButton == upSingleClick) displayButtonSelection = drawSensorSetupPage(true, true, tdsSetupUIButton);
+                    else if (navigationButton == downSingleClick) displayButtonSelection = drawSensorSetupPage(true, true, waterTempSetupUIButton);
                     break;
-                case waterTempSetupUIButton:
+                case waterTempSetupUIButton:    //should be finished with all five buttons here.
+                    if (navigationButton == centerSingleClick)
+                    {
+                        sensors.waterTemp = !sensors.waterTemp;
+                        displayButtonSelection = drawSensorSetupPage(true, true, waterTempSetupUIButton);
+                    }
+                    else if (navigationButton == rightSingleClick) displayButtonSelection = drawSensorSetupPage(true, true, back);
+                    else if (navigationButton == leftSingleClick) displayButtonSelection = drawSensorSetupPage(true, true, altimeterSetupUIButton);
+                    else if (navigationButton == upSingleClick) displayButtonSelection = drawSensorSetupPage(true, true, turbiditySetupUIButton);
+                    else if (navigationButton == downSingleClick) displayButtonSelection = drawSensorSetupPage(true, true, particulateSetupUIButton);
                     break;
             }
             navigationButton = noPress;     //if I forget this line, the menu immediately jumps back to the page I was trying to leave.

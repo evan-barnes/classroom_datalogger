@@ -1,15 +1,35 @@
 /*
 To do:
---I still need to attach the interrupts to the navigation buttons, and set up the interrupt service routines. Also the flags or state trackers that 
-    will keep track of button state. I've only defined the pins and set them as inputs with pullups.
---adafruit gfx library has a button class. switch to using that for the UI, rather than creating my own. I think it will ultimately be simpler.
-    It has a built in text label component, which means I don't have to figure that out on my own.
-
+--Add a flag for recording mode that I can access in the Setup Sensors menu page. Basically, I'm thinking that record mode will be either One Shot or Continuous.
+    Continuous is for long periods of recording data, like logging pressure, temp, humidity, and UV while I climb a mountain. Want to see how those change over
+    a long time, so they all go in one log file together. One shot isn't exactly a true one-shot, but I don't have a better term yet. One Shot is for periodic
+    sensor readings, like the water sensors. Maybe call that mode Periodic. The idea is that I'll stop every 15 minutes or so and take a new set of samples
+    in a lake or stream as I hike upstream. These short files will have many samples each, but I don't want to record continuously because the sensors won't be in
+    the water while I hike, so I don't want to collect bad data. I could either figure out how to pause and resume recordings on a single file, or I can do what I'm proposing here:
+    set a record mode flag to Periodic/One shot, and when I open a new file to log data to, it prepends the name of that file with "Periodic - " followed by the date,
+    and then I know that any log files in that immediate date range that have that label are related to each other. I could also prepend Continuous mode files with 
+    "Continuous - " so that I can later sort the log files more easily.
+    --Make sure to include the "Record Mode" options in the setup Page. Make it a toggle too, maybe, so that clicking on the button switches some text (either on the
+    button itself or beside it) between Continuous and Periodic. 
+    -----actually going to call the modes STEADY and BURST. Shorter words will fit better on screen.
+    --I could even add extra labels to the file to indicate which sensors are used, but I will also have those in the header of each CSV, so I'm not sure.
+--Add automatic naming that includes the above labels and the date/time for new log files.
+--consolidate GPS things into a function outside of main loop.
 
 
 Things I'd like to add:
     -last setup saved. like if the last time I logged data I enabled GPS, baro, UV index, and temperature, it would be nice to have those
     automatically enabled next time I boot up the system. Not sure how to save that kind of state yet.
+        --Actually, I bet I can save those as a .ini file on the SD card that I could reference on reboot! Or maybe save it in PROGMEM? Not sure how that works. 
+        Just looked, PROGMEM keyword puts things in flash rather than RAM. Seems perfect, I think. Look that up for the Feather Sense
+
+
+General notes:
+    --I have a record mode flag now, which I can set to either recordingSteady or recordingBurst.
+    --I think I might want to create a sensor class. Then each sensor could have an instantiation of the sensor class. Ideally, the class would store a bunch of info 
+        for me, like the position of the UI buttons for that sensor, the Adafruit_GFX_Button object for the sensor, and the flag showing whether the sensor is enabled.
+        I would also like to have an array or some structure holding all the sensor objects so that I could iterate through them. I think that might make it easier
+        to do things like navigate the UI buttons. Not sure yet.
 */
 
 /*
@@ -63,14 +83,14 @@ water temp                                  https://www.dfrobot.com/product-1354
 #define PIN_BUTTON_LEFT     19  //switching from pin 13 fixed my problems! Pin 13 shares the builtin led, so maybe using it as input was problem.
 #define PIN_BUTTON_RIGHT    11
 #define PIN_BUTTON_UP       12
-#define PIN_BUTTON_DOWN     10
+#define PIN_BUTTON_DOWN     18     //for some reason down button stopped working on Pin 10, had to switch to an analog capable pin again
 #define PIN_BUTTON_CENTER   2
 
 
 #define FORCE_GPS_FIX true  //set to true for indoor testing (skips over the part where it waits for a fix)
 #define FORCE_RECORDING_STATE_SWITCH false   //switches the currentlyRecording flag every time the lock screen is entered so I can test that
                                             //the state machine properly hands off to the correct UI page based on recording state
-
+#define NUM_SENSORS 11      //number of sensors I'll be logging data with
 
 //note that the TX and RX pins (0 and 1 respectively) are used for the GPS serial
 // define hardware serial port for GPS?
@@ -129,9 +149,11 @@ enum displayButtons    //states for properly tracking and highlighting the butto
     goToSleep,      //unused, but saving this option for later if I can figure out how to make the mcu sleep
     back,           //reuse this for all the secondary pages
     stopRecording,  //displayed on recording screen
-    unlockScreen    //displayed on lock screen
+    unlockScreen,    //displayed on lock screen
+    selectRecordMode    //display on setup screen
 };
 
+/*
 enum sensorSetupToggles     //used for showing a list of sensors that will be enabled or disabled for recording
 {
     //I wanted to move this out of the main displayButtons enum to keep more organized. Plus these will be formatted differently.
@@ -144,16 +166,16 @@ enum sensorSetupToggles     //used for showing a list of sensors that will be en
     tdsToggle,      //total dissolved solids
     pmToggle        //particulate matter air sensor toggle
 };
+*/
 
-//going to need other button enums for each page
+//enum for recording mode flags and other useful state flags
+enum recordingModeFlags
+{
+    recordingSteady,
+    recordingBurst
+};
 
-
-//thinking I'll use enum to track which navigation button has been pressed, and I can use this as a data type to pass into functions
-//to control how they make the display UI respond.
-//Once a button is pressed and the interrupt makes a note of it, I need to quickly set this as a flag separate from the direct tracking of the buttons.
-//need the direct tracking of the buttons to be separate from the corresponding flags so that I can reset the actual button tracking to let the next ISR catch 
-//the next press. Complex, do more research.
-
+//button press tracking flags
 enum navButton      //going to use the ANO nav wheel, but leave out the encoder for now. 
 {
     noPress,        //no buttons currently pressed
@@ -165,9 +187,40 @@ enum navButton      //going to use the ANO nav wheel, but leave out the encoder 
     centerLongPress
 };
 
-//going to need some system state flags as well, I think, like one for tracking which sensors are enabled.
-//Actually a python-like dictionary would be better for that because then I could have dict{sensorName:enabledStatus; etc}.
-//Does C/++ have equivalent structure? Oh, is that a struct?
+//going to try using a struct to keep track of which sensors are enabled so I can know what information to log
+//remember that I currently have 11 sensors
+struct sensorEnableFlags
+{
+    bool GPS;               //turn all of GPS logging on or off (choose what data from GPS to log elsewhere)
+    bool IMU;               //don't know what I'd record from this yet, maybe inclination
+    bool humidity;          
+    bool barometer;         //barometer from BMP280
+    bool temp;              //air temp from BMP280
+    bool altimeter;         //calibrated altitude from BMP280. redundant with GPS
+    bool UV;
+    bool particulate;       //particulate matter sensor for air quality
+    bool TDS;               //total disolved solids (water)
+    bool turbidity;         //water
+    bool waterTemp;         //water temp sensor
+};
+
+//set the default sensors to record
+sensorEnableFlags sensors = 
+{
+    true,                   //gps on by default
+    false,                  
+    true,                   //humidity on by default
+    true,                   //barometer on by default
+    true,                   //air temp on by default
+    false,
+    true,                   //I want UV on by default, but keep it off for now until I actually have the sensor
+    false,
+    false,
+    false,
+    false
+};
+
+
 
 //create the labels and arrays of button objects for each UI page
 char mainPageButtonLabels[3][7] = {"Setup", "Record", "Lock"};  //The [7] is because each of these labels is an array of chars, not a string like I'm used to from Python
@@ -175,7 +228,44 @@ Adafruit_GFX_Button mainPageButtons[3];                         //the actual arr
 char recordingPageButtonLabels[2][5] = {"Stop", "Lock"};
 Adafruit_GFX_Button recordingPageButtons[2];
 Adafruit_GFX_Button backButton;         //just a single button object that I'll reuse for all back buttons. Keeps them at consistent position across UI if I do this.
-Adafruit_GFX_Button unlockButton;       //eventually want this to operate on long press, not single click
+Adafruit_GFX_Button unlockButton;       //requires long click to unlock
+Adafruit_GFX_Button recordSteadyButton;   //for selecting continuous or burst mode
+Adafruit_GFX_Button recordBurstButton;
+
+//create buttons and labels for the sensors
+Adafruit_GFX_Button gpsButton;
+Adafruit_GFX_Button imuButton;
+Adafruit_GFX_Button humidityButton;
+Adafruit_GFX_Button barometerButton;
+Adafruit_GFX_Button tempButton;
+Adafruit_GFX_Button altimeterButton;
+Adafruit_GFX_Button uvButton;
+Adafruit_GFX_Button particulateButton;
+Adafruit_GFX_Button tdsButton;
+Adafruit_GFX_Button turbidityButton;
+Adafruit_GFX_Button waterTempButton;
+
+
+
+//create some standard values for sensor button positions and sizes
+int sensorButtonWidth = (display.width() - 4*mainButtonMargin) / 3;
+int sensorButtonHeight = (display.height() - 7*mainButtonMargin) / 6;
+
+//create a function for drawing an X over sensor buttons to show that they're disabled
+void drawSensorDisableX(int x, int y)
+{
+    display.drawLine(x + 10, y + 10, x + sensorButtonWidth - 10, y + sensorButtonHeight - 10, BLACK);
+    display.drawLine(x + sensorButtonWidth - 10, y + 10, x + 10, y + sensorButtonHeight - 10, BLACK);
+}
+
+
+//flags for tracking the main states of the system and the UI
+masterUIState currentUIPage = mainPage;                 //initialize the UI state to the main page, since this is restart/boot
+displayButtons displayButtonSelection = setupSensors;   //initialize button highlighting/tracking to sensor setup button on main page for boot
+navButton navigationButton = noPress;                   //initialize state of button presses to none pressed. 
+bool currentlyRecording = false;                        //set to true when recording is started, set to false when stopped.
+recordingModeFlags recordMode = recordingSteady;        //default to steady record mode. Can also set to recordingBurst
+
 
 
 //the main page of the display when not recording.
@@ -224,16 +314,34 @@ displayButtons drawSensorSetupPage(bool initialClear, bool refresh, displayButto
 {
     //placeholder 
     if (initialClear) display.clearDisplay();
-    display.setCursor(20,20);
-    display.setTextSize(4);
+    display.setCursor(display.width() - mainButtonMargin - mainButtonWidth + 20, 40);
+    display.setTextSize(3);
     display.setTextColor(BLACK);
-    display.println("Setup Test Page");
+    display.println("Mode:");
 
+    gpsButton.drawButton(false);
+    imuButton.drawButton(false);
+    barometerButton.drawButton(false);
+    tempButton.drawButton(false);
+    particulateButton.drawButton(false);
+    tdsButton.drawButton(false);
+    waterTempButton.drawButton(false);
+    turbidityButton.drawButton(false);
+    uvButton.drawButton(false);
+    humidityButton.drawButton(false);
+    altimeterButton.drawButton(false);
+    
     switch (selectedButton)
     {
-    case back:
-        backButton.drawButton(true); //draw highlighted. It's the default button to be selected when going to this page
-        break;
+        case back:
+            backButton.drawButton(true); //draw highlighted. It's the default button to be selected when going to this page
+            if (recordMode == recordingSteady) recordSteadyButton.drawButton(false);
+            else if (recordMode == recordingBurst) recordBurstButton.drawButton(false);
+            break;
+        case selectRecordMode:
+            backButton.drawButton(false);
+            if (recordMode == recordingSteady) recordSteadyButton.drawButton(true);
+            else if (recordMode == recordingBurst) recordBurstButton.drawButton(true);
     }
     if (refresh) display.refresh();
     return selectedButton;
@@ -305,11 +413,7 @@ void updateNavButtons(void)
 }
 
 
-//flags for tracking the main states of the system and the UI
-masterUIState currentUIPage = mainPage;                 //initialize the UI state to the main page, since this is restart/boot
-displayButtons displayButtonSelection = setupSensors;   //initialize button highlighting/tracking to sensor setup button on main page for boot
-navButton navigationButton = noPress;                   //initialize state of button presses to none pressed. 
-bool currentlyRecording = false;                        //set to true when recording is started, set to false when stopped.
+
 
 void UIStateManager(void)
 {
@@ -372,7 +476,25 @@ void UIStateManager(void)
                         currentUIPage = mainPage;
                         displayButtonSelection = drawMainPage(true, true, setupSensors);
                     }
+                    else if (navigationButton == downSingleClick || navigationButton == upSingleClick)
+                    {
+                        currentUIPage = setupPage;
+                        displayButtonSelection = drawSensorSetupPage(true, true, selectRecordMode);
+                    }
                     break;
+                case selectRecordMode:
+                    if (navigationButton == downSingleClick || navigationButton == upSingleClick)
+                    {
+                        currentUIPage = setupPage;
+                        displayButtonSelection = drawSensorSetupPage(true, true, back);
+                    }
+                    else if (navigationButton == centerSingleClick)
+                    {
+                        currentUIPage = setupPage;
+                        if (recordMode == recordingSteady) recordMode = recordingBurst;
+                        else if (recordMode == recordingBurst) recordMode = recordingSteady;
+                        displayButtonSelection = drawSensorSetupPage(true, true, selectRecordMode);
+                    }
             }
             navigationButton = noPress;     //if I forget this line, the menu immediately jumps back to the page I was trying to leave.
             break;
@@ -448,22 +570,66 @@ void setup()
                                             mainButtonHeight, BLACK, WHITE, BLACK, recordingPageButtonLabels[0], 3);
     recordingPageButtons[1].initButtonUL(&display, 3*mainButtonMargin + 2*mainButtonWidth, display.height() - mainButtonMargin - mainButtonHeight,
                                             mainButtonWidth, mainButtonHeight, BLACK, WHITE, BLACK, recordingPageButtonLabels[1], 3);
-
-    for (int i = 0; i < 3; i++) //initialize the main page UI buttons. For loop made more sense here
+    //initialize the main page UI buttons. For loop made more sense here
+    for (int i = 0; i < 3; i++) 
     {
         mainPageButtons[i].initButtonUL(&display, mainButtonMargin + i*mainButtonMargin + i*mainButtonWidth, display.height() - mainButtonMargin - mainButtonHeight,
                                         mainButtonWidth, mainButtonHeight, BLACK, WHITE, BLACK, mainPageButtonLabels[i], 3);
     }
-
+    //initialize back and unlock buttons shared across multiple pages
     backButton.initButtonUL(&display, 3*mainButtonMargin + 2*mainButtonWidth, display.height() - mainButtonMargin - mainButtonHeight, 
                             mainButtonWidth, mainButtonHeight, BLACK, WHITE, BLACK, "Back", 3);
     unlockButton.initButtonUL(&display, 3*mainButtonMargin + 2*mainButtonWidth, display.height() - mainButtonMargin - mainButtonHeight, 
                             mainButtonWidth, mainButtonHeight, BLACK, WHITE, BLACK, "Unlock", 3);
+    //create buttons for record mode flags. The button that is displayed changes based on mode, which is why I have two nearly identical copies below.
+    recordSteadyButton.initButtonUL(&display, display.width() - mainButtonMargin - mainButtonWidth, mainButtonMargin*2 + mainButtonHeight, 
+                                mainButtonWidth, mainButtonHeight, BLACK, WHITE, BLACK, "Steady", 3);
+    recordBurstButton.initButtonUL(&display, display.width() - mainButtonMargin - mainButtonWidth, mainButtonMargin*2 + mainButtonHeight, 
+                                mainButtonWidth, mainButtonHeight, BLACK, WHITE, BLACK, "Burst", 3);
 
-    /*  button coordinates for reference
-    int buttonXCoords[3] = {mainButtonMargin, 2*mainButtonMargin + mainButtonWidth, 3*mainButtonMargin + 2*mainButtonWidth};
-    int buttonYCoords = display.height() - mainButtonMargin - mainButtonHeight;
-    */
+
+    //initialize the sensor enable buttons. there's got to be a more efficient way to do this... 
+    //creating position variables for the sensor UI buttons to make things cleaner below
+    int sensorPositionsCol1X = mainButtonMargin;
+    int sensorPositionsCol2X = sensorButtonWidth + 2*mainButtonMargin;
+    int sensorPositionsColsY[6];    //array of Y positions for the sensor UI buttons. just to make initializing the buttons below a bit cleaner.
+    for (int i = 0; i < 6; i++)
+    {
+        sensorPositionsColsY[i] = mainButtonMargin + i*mainButtonMargin + i*sensorButtonHeight;
+    }
+    //do column 1 first
+    gpsButton.initButtonUL(&display, sensorPositionsCol1X, sensorPositionsColsY[0], sensorButtonWidth, sensorButtonHeight, BLACK, WHITE, BLACK, "GPS", 2);
+    humidityButton.initButtonUL(&display, sensorPositionsCol1X, sensorPositionsColsY[1], sensorButtonWidth, sensorButtonHeight, BLACK, WHITE, BLACK, "Humidity", 2);
+    barometerButton.initButtonUL(&display, sensorPositionsCol1X, sensorPositionsColsY[2], sensorButtonWidth, sensorButtonHeight, BLACK, WHITE, BLACK, "Barometer", 2);
+    tempButton.initButtonUL(&display, sensorPositionsCol1X, sensorPositionsColsY[3], sensorButtonWidth, sensorButtonHeight, BLACK, WHITE, BLACK, "Air Temp", 2);
+    altimeterButton.initButtonUL(&display, sensorPositionsCol1X, sensorPositionsColsY[4], sensorButtonWidth, sensorButtonHeight, BLACK, WHITE, BLACK, "Altimeter", 2);
+    uvButton.initButtonUL(&display, sensorPositionsCol1X, sensorPositionsColsY[5], sensorButtonWidth, sensorButtonHeight, BLACK, WHITE, BLACK, "UV Index", 2);
+    //now column 2    
+    particulateButton.initButtonUL(&display, sensorPositionsCol2X, sensorPositionsColsY[0], sensorButtonWidth, sensorButtonHeight, BLACK, WHITE, BLACK, "Air Qual", 2);
+    imuButton.initButtonUL(&display, sensorPositionsCol2X, sensorPositionsColsY[1], sensorButtonWidth, sensorButtonHeight, BLACK, WHITE, BLACK, "IMU", 2);
+    tdsButton.initButtonUL(&display, sensorPositionsCol2X, sensorPositionsColsY[2], sensorButtonWidth, sensorButtonHeight, BLACK, WHITE, BLACK, "H2O TDS", 2);
+    turbidityButton.initButtonUL(&display, sensorPositionsCol2X, sensorPositionsColsY[3], sensorButtonWidth, sensorButtonHeight, BLACK, WHITE, BLACK, "H20 Turb", 2);
+    waterTempButton.initButtonUL(&display, sensorPositionsCol2X, sensorPositionsColsY[4], sensorButtonWidth, sensorButtonHeight, BLACK, WHITE, BLACK, "H20 Temp", 2);
+
+/*
+//create buttons and labels for the sensors
+Adafruit_GFX_Button gpsButton;
+Adafruit_GFX_Button imuButton;
+Adafruit_GFX_Button humidityButton;
+Adafruit_GFX_Button barometerButton;
+Adafruit_GFX_Button tempButton;
+Adafruit_GFX_Button altimeterButton;
+Adafruit_GFX_Button uvButton;
+Adafruit_GFX_Button particulateButton;
+Adafruit_GFX_Button tdsButton;
+Adafruit_GFX_Button turbidityButton;
+Adafruit_GFX_Button waterTempButton;
+
+//create some standard values for sensor button positions and sizes
+int sensorButtonWidth = (display.width() - 4*mainButtonMargin) / 3;
+int sensorButtonHeight = (display.height() - 7*mainButtonMargin) / 6;
+*/
+
 
 
     //start the neopixel

@@ -67,6 +67,9 @@ water temp                                  https://www.dfrobot.com/product-1354
 #include <Adafruit_SharpMem.h>
 #include <OneButton.h>
 
+using namespace std;
+#include <vector>
+
 //SD card connections
 #define MOSI 25     
 #define MISO 24     
@@ -91,6 +94,7 @@ water temp                                  https://www.dfrobot.com/product-1354
 #define FORCE_RECORDING_STATE_SWITCH false   //switches the currentlyRecording flag every time the lock screen is entered so I can test that
                                             //the state machine properly hands off to the correct UI page based on recording state
 #define NUM_SENSORS 11      //number of sensors I'll be logging data with
+#define INDICATOR_MAX_BRIGHTNESS 8
 
 //note that the TX and RX pins (0 and 1 respectively) are used for the GPS serial
 // define hardware serial port for GPS?
@@ -143,30 +147,27 @@ enum displayButtons    //states for properly tracking and highlighting the butto
 {
     //thought it seemed simpler in long run to have these all be part of the same enum
     //buttons on the main page
-    setupSensors,   //main page left button
-    startRecording, //main page center button
-    lockScreen,     //main page right button
-    goToSleep,      //unused, but saving this option for later if I can figure out how to make the mcu sleep
-    back,           //reuse this for all the secondary pages
-    stopRecording,  //displayed on recording screen
-    unlockScreen,    //displayed on lock screen
-    selectRecordMode    //display on setup screen
+    setupSensors,                   //main page left button
+    startRecording,                 //main page center button
+    lockScreen,                     //main page right button
+    goToSleep,                      //unused, but saving this option for later if I can figure out how to make the mcu sleep
+    back,                           //reuse this for all the secondary pages
+    stopRecording,                  //displayed on recording screen
+    unlockScreen,                   //displayed on lock screen
+    selectRecordMode,               //display on setup screen
+    gpsSetupUIButton,               //the following are used for tracking which button is highlighted on the display
+    imuSetupUIButton,
+    humiditySetupUIButton,
+    barometerSetupUIButton,
+    tempSetupUIButton,
+    altimeterSetupUIButton,
+    uvSetupUIButton,
+    particulateSetupUIButton,
+    tdsSetupUIButton,
+    turbiditySetupUIButton,
+    waterTempSetupUIButton,
+    noSensorUISelection                          //going to use this for my subfunction that draws the sensor setup buttons (sometimes none of those will be selected)
 };
-
-/*
-enum sensorSetupToggles     //used for showing a list of sensors that will be enabled or disabled for recording
-{
-    //I wanted to move this out of the main displayButtons enum to keep more organized. Plus these will be formatted differently.
-    gpsToggle,
-    baroToggle,
-    tempToggle,
-    imuToggle,
-    uvToggle,
-    humidityToggle,
-    tdsToggle,      //total dissolved solids
-    pmToggle        //particulate matter air sensor toggle
-};
-*/
 
 //enum for recording mode flags and other useful state flags
 enum recordingModeFlags
@@ -213,12 +214,15 @@ sensorEnableFlags sensors =
     true,                   //barometer on by default
     true,                   //air temp on by default
     false,
-    true,                   //I want UV on by default, but keep it off for now until I actually have the sensor
+    false,                   //I want UV on by default, but keep it off for now until I actually have the sensor
     false,
     false,
     false,
     false
 };
+
+
+
 
 
 
@@ -267,6 +271,70 @@ bool currentlyRecording = false;                        //set to true when recor
 recordingModeFlags recordMode = recordingSteady;        //default to steady record mode. Can also set to recordingBurst
 
 
+displayButtons drawSensorSetupButtons(displayButtons selected)
+{
+    /*possible values of selected button that will be passed in:
+    gpsSetupUIButton, imuSetupUIButton, humiditySetupUIButton, barometerSetupUIButton, tempSetupUIButton, altimeterSetupUIButton,
+    uvSetupUIButton, particulateSetupUIButton, tdsSetupUIButton, turbiditySetupUIButton, waterTempSetupUIButton, noSensorUISelection*/
+
+    //if the sensor is enabled, the button needs to be filled in. if disabled, not filled in.
+    //additionally, if the button is selected, it needs to be filled in. however if it's enabled and selected, it will already be filled in.
+    //I think I need a clear selector cursor or something, but with the way I've set that up, that will be hard. So for now, nonoptimal solution.
+    //first, draw all buttons filled or not based on enabled state. Then, draw the selected buttons over those. I think that should work fine. 
+
+    sensors.altimeter ? altimeterButton.drawButton(true) : altimeterButton.drawButton(false);   //draw filled in if enabled, else false. Ternary operator.
+    sensors.barometer ? barometerButton.drawButton(true) : barometerButton.drawButton(false);
+    sensors.GPS ? gpsButton.drawButton(true) : gpsButton.drawButton(false);
+    sensors.humidity ? humidityButton.drawButton(true) : humidityButton.drawButton(false);
+    sensors.IMU ? imuButton.drawButton(true) : imuButton.drawButton(false);
+    sensors.particulate ? particulateButton.drawButton(true) : particulateButton.drawButton(false);
+    sensors.TDS ? tdsButton.drawButton(true) : tdsButton.drawButton(false);
+    sensors.temp ? tempButton.drawButton(true) : tempButton.drawButton(false);
+    sensors.turbidity ? turbidityButton.drawButton(true) : turbidityButton.drawButton(false);
+    sensors.UV ? uvButton.drawButton(true) : uvButton.drawButton(false);
+    sensors.waterTemp ? waterTempButton.drawButton(true) : waterTempButton.drawButton(false);
+
+    switch (selected)
+    {
+    case noSensorUISelection:
+        break;
+    case altimeterSetupUIButton:
+        altimeterButton.drawButton(true);
+        break;
+    case gpsSetupUIButton:
+        gpsButton.drawButton(true);
+        break;
+    case imuSetupUIButton:
+        imuButton.drawButton(true);
+        break;
+    case humiditySetupUIButton:
+        humidityButton.drawButton(true);
+        break;
+    case barometerSetupUIButton:
+        barometerButton.drawButton(true);
+        break;
+    case tempSetupUIButton:
+        tempButton.drawButton(true);
+        break;
+    case uvSetupUIButton:
+        uvButton.drawButton(true);
+        break;
+    case particulateSetupUIButton:
+        particulateButton.drawButton(true);
+        break;
+    case tdsSetupUIButton:
+        tdsButton.drawButton(true);
+        break;
+    case turbiditySetupUIButton:
+        turbidityButton.drawButton(true);
+        break;
+    case waterTempSetupUIButton:
+        waterTempButton.drawButton(true);
+        break;
+    }
+
+}
+
 
 //the main page of the display when not recording.
 //have a different function track nav button presses and tell this function which button to  hightlight.
@@ -314,35 +382,33 @@ displayButtons drawSensorSetupPage(bool initialClear, bool refresh, displayButto
 {
     //placeholder 
     if (initialClear) display.clearDisplay();
-    display.setCursor(display.width() - mainButtonMargin - mainButtonWidth + 20, 40);
+    display.setCursor(display.width() - mainButtonMargin - mainButtonWidth + 20, mainButtonMargin);
     display.setTextSize(3);
     display.setTextColor(BLACK);
     display.println("Mode:");
 
-    gpsButton.drawButton(false);
-    imuButton.drawButton(false);
-    barometerButton.drawButton(false);
-    tempButton.drawButton(false);
-    particulateButton.drawButton(false);
-    tdsButton.drawButton(false);
-    waterTempButton.drawButton(false);
-    turbidityButton.drawButton(false);
-    uvButton.drawButton(false);
-    humidityButton.drawButton(false);
-    altimeterButton.drawButton(false);
-    
-    switch (selectedButton)
+    if (selectedButton == back || selectedButton == selectRecordMode)
     {
-        case back:
-            backButton.drawButton(true); //draw highlighted. It's the default button to be selected when going to this page
-            if (recordMode == recordingSteady) recordSteadyButton.drawButton(false);
-            else if (recordMode == recordingBurst) recordBurstButton.drawButton(false);
-            break;
-        case selectRecordMode:
-            backButton.drawButton(false);
-            if (recordMode == recordingSteady) recordSteadyButton.drawButton(true);
-            else if (recordMode == recordingBurst) recordBurstButton.drawButton(true);
+        drawSensorSetupButtons(noSensorUISelection);
+
+        switch (selectedButton)
+        {
+            case back:
+                backButton.drawButton(true); //draw highlighted. It's the default button to be selected when going to this page
+                if (recordMode == recordingSteady) recordSteadyButton.drawButton(false);
+                else if (recordMode == recordingBurst) recordBurstButton.drawButton(false);
+                break;
+            case selectRecordMode:
+                backButton.drawButton(false);
+                if (recordMode == recordingSteady) recordSteadyButton.drawButton(true);
+                else if (recordMode == recordingBurst) recordBurstButton.drawButton(true);
+        }
     }
+    else
+    {
+        
+    }
+    
     if (refresh) display.refresh();
     return selectedButton;
 }
@@ -439,7 +505,7 @@ void UIStateManager(void)
                     else if (navigationButton == centerSingleClick) //change master page to the sensor setup page
                     {
                         currentUIPage = setupPage;
-                        displayButtonSelection = drawSensorSetupPage(true, true, back);
+                        displayButtonSelection = drawSensorSetupPage(true, true, back); //the default highlighted button on the setup page is "back"
                     }
                     else if (navigationButton == leftSingleClick) displayButtonSelection = drawMainPage(true, true, lockScreen);
                     break;
@@ -495,6 +561,29 @@ void UIStateManager(void)
                         else if (recordMode == recordingBurst) recordMode = recordingSteady;
                         displayButtonSelection = drawSensorSetupPage(true, true, selectRecordMode);
                     }
+                    break;
+                case gpsSetupUIButton:
+                    break;
+                case imuSetupUIButton:
+                    break;
+                case humiditySetupUIButton:
+                    break;
+                case barometerSetupUIButton:
+                    break;
+                case tempSetupUIButton:
+                    break;
+                case altimeterSetupUIButton:
+                    break;
+                case uvSetupUIButton:
+                    break;
+                case particulateSetupUIButton:
+                    break;
+                case tdsSetupUIButton:
+                    break;
+                case turbiditySetupUIButton:
+                    break;
+                case waterTempSetupUIButton:
+                    break;
             }
             navigationButton = noPress;     //if I forget this line, the menu immediately jumps back to the page I was trying to leave.
             break;
@@ -582,9 +671,9 @@ void setup()
     unlockButton.initButtonUL(&display, 3*mainButtonMargin + 2*mainButtonWidth, display.height() - mainButtonMargin - mainButtonHeight, 
                             mainButtonWidth, mainButtonHeight, BLACK, WHITE, BLACK, "Unlock", 3);
     //create buttons for record mode flags. The button that is displayed changes based on mode, which is why I have two nearly identical copies below.
-    recordSteadyButton.initButtonUL(&display, display.width() - mainButtonMargin - mainButtonWidth, mainButtonMargin*2 + mainButtonHeight, 
+    recordSteadyButton.initButtonUL(&display, display.width() - mainButtonMargin - mainButtonWidth, mainButtonMargin*2 + mainButtonHeight - 30, 
                                 mainButtonWidth, mainButtonHeight, BLACK, WHITE, BLACK, "Steady", 3);
-    recordBurstButton.initButtonUL(&display, display.width() - mainButtonMargin - mainButtonWidth, mainButtonMargin*2 + mainButtonHeight, 
+    recordBurstButton.initButtonUL(&display, display.width() - mainButtonMargin - mainButtonWidth, mainButtonMargin*2 + mainButtonHeight - 30, 
                                 mainButtonWidth, mainButtonHeight, BLACK, WHITE, BLACK, "Burst", 3);
 
 
@@ -634,7 +723,7 @@ int sensorButtonHeight = (display.height() - 7*mainButtonMargin) / 6;
 
     //start the neopixel
     indicator.begin();
-    indicator.setBrightness(32);
+    indicator.setBrightness(INDICATOR_MAX_BRIGHTNESS);
     
     //while (!Serial);  // uncomment to have the sketch wait until Serial is ready. comment out if using away from computer
     Serial.begin(115200);

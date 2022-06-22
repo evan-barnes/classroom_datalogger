@@ -15,6 +15,10 @@ To do:
     --I could even add extra labels to the file to indicate which sensors are used, but I will also have those in the header of each CSV, so I'm not sure.
 --Add automatic naming that includes the above labels and the date/time for new log files.
 --consolidate GPS things into a function outside of main loop.
+--Add a "Waiting for GPS Fix" master UI state. Right now the whole system waits to get a fix before proceeding to the main loop. Instead, I want to have that process
+    delayed until I actually tell the system to start recording. Once I tell it to start recording, I want it to check for and wait for a GPS fix before switching to the 
+    recording state and UI page. I'll need a subpage of the recording page that displays "Waiting for GPS fix" until a fix is established, and then switches to "recording active"
+    when a fix is established.
 
 
 Things I'd like to add:
@@ -22,7 +26,7 @@ Things I'd like to add:
     automatically enabled next time I boot up the system. Not sure how to save that kind of state yet.
         --Actually, I bet I can save those as a .ini file on the SD card that I could reference on reboot! Or maybe save it in PROGMEM? Not sure how that works. 
         Just looked, PROGMEM keyword puts things in flash rather than RAM. Seems perfect, I think. Look that up for the Feather Sense
-
+    -ability to reset the RTC on the SD/RTC featherwing with the time from the GPS RTC. Could be an option on the setup page.
 
 General notes:
     --I have a record mode flag now, which I can set to either recordingSteady or recordingBurst.
@@ -30,10 +34,16 @@ General notes:
         for me, like the position of the UI buttons for that sensor, the Adafruit_GFX_Button object for the sensor, and the flag showing whether the sensor is enabled.
         I would also like to have an array or some structure holding all the sensor objects so that I could iterate through them. I think that might make it easier
         to do things like navigate the UI buttons. Not sure yet.
+    --I know, I have two RTCs. However, the RTC on the SD/RTC module works with a convenient library, and can be reset to local time, which the GPS RTC can't,
+        so using the SD RTC saves me a bunch of work. There's also an interrupt breakout on the SD RTC that could be useful. As far as setting RTC time, I just have
+        it set by using the example sketch for the RTC that comes with the RTCLib. It sets the clock from the computer clock time at compile, so it's like 20 seconds 
+        behind, but that's good enough. I have the battery backup installed, so I should be set on time for a long time. Note that the RTC doesn't account for DST,
+        so I will eventually have to automate that myself somehow.
 */
 
 /*
-Reference info about the Feather Sense board, like built-in sensor addresses
+Reference info about the Feather Sense board, like built-in sensor addresses.
+Adafruit reference list of i2c addresses: https://learn.adafruit.com/i2c-addresses/the-list
 
 gyro/accelerometer          i2c: 0x6A, with an IRQ on digital pin 3
 magnetometer                i2c: 0x1C
@@ -41,6 +51,7 @@ light/gesture/proximity     i2c: 0x39, with an IRQ on digital pin 36
 humidity                    i2c: 0x44
 temp/pressure               i2c: 0x77
 pdm mic                     data on d34, clock on d35
+RTC (on SD card; PCF8523)   i2c: 0x68
 */
 
 /*
@@ -65,10 +76,9 @@ water temp                                  https://www.dfrobot.com/product-1354
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SharpMem.h>
-#include <OneButton.h>
+#include <OneButton.h>              //handles navigation button events
+#include <RTClib.h>
 
-using namespace std;
-#include <vector>
 
 //SD card connections
 #define MOSI 25     
@@ -104,6 +114,14 @@ Adafruit_GPS GPS(&GPSSerial);
 // Set GPSECHO to 'false' to turn off echoing the GPS data to the Serial console
 // Set to 'true' if you want to debug and listen to the raw GPS sentences
 #define GPSECHO false
+
+///*
+//create an instance of the RTC (sd featherwing) and build a char array for the days of the week
+RTC_PCF8523 rtc;
+char daysOfTheWeek[7][12] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
+DateTime currentTime;       //real time according to RTC module (not GPS rtc) 
+DateTime displayedTime;   //used for writing time on displaying and comparing to actual time so I can update screen in nonblocking manner
+//*/
 
 //define the builtin neopixel that I'll use as a state indicator for the system
 Adafruit_NeoPixel indicator = Adafruit_NeoPixel(1, 8, NEO_GRB + NEO_KHZ800);   
@@ -345,10 +363,25 @@ displayButtons drawMainPage(bool initialClear, bool refresh, displayButtons sele
     //Want three menu options: Setup, Begin Recording, Lock Screen.
     //I think I'll have those three buttons along the bottom, with a window at the top for displaying useful data (altitude, time, temp, gps fix state, etc)
 
-    display.setCursor(80,20);
-    display.setTextSize(4);
+    display.setCursor(10,10);
+    display.setTextSize(3);
     display.setTextColor(BLACK);
     display.println("Main Menu.");
+    ///*
+    //display the time in the upper right corner. update every time the minute changes
+    display.setCursor(260, 10);
+    display.setTextSize(2);
+    display.setTextColor(BLACK);
+    display.println(daysOfTheWeek[displayedTime.dayOfTheWeek()]);
+    display.setCursor(260, 30);
+    display.print(displayedTime.hour());
+    display.print(":");
+    display.print(displayedTime.minute());
+    display.print(", ");
+    display.print(displayedTime.month());
+    display.print("/");
+    display.println(displayedTime.day());
+    //*/
 
     switch (selectedButton)
     {
@@ -499,6 +532,10 @@ void UIStateManager(void)
     switch (currentUIPage) //first figure out what UI page I'm on (main, setup, recording, lock)
     {
         case mainPage:  //if I'm on the main page, determine which display button to highlight
+            //if (displayedTime.minute() < currentTime.minute() && navigationButton == noPress)
+            //{
+
+            //}
             switch (displayButtonSelection) //look at the current button selection so that I can know where to move the button based on the nav direction
             {
                 case setupSensors:
@@ -741,6 +778,8 @@ void UIStateManager(void)
 
 uint32_t timer = millis();   //used for timing the updates on the Serial monitor and the logfile
 unsigned long lastDisplayUpdate;
+unsigned long lastRTCread = millis();   //keep track of when the RTC was last read from. Not sure if I need this yet.
+            
 
 
 
@@ -807,26 +846,6 @@ void setup()
     turbidityButton.initButtonUL(&display, sensorPositionsCol2X, sensorPositionsColsY[3], sensorButtonWidth, sensorButtonHeight, BLACK, WHITE, BLACK, "H20 Turb", 2);
     waterTempButton.initButtonUL(&display, sensorPositionsCol2X, sensorPositionsColsY[4], sensorButtonWidth, sensorButtonHeight, BLACK, WHITE, BLACK, "H20 Temp", 2);
 
-/*
-//create buttons and labels for the sensors
-Adafruit_GFX_Button gpsButton;
-Adafruit_GFX_Button imuButton;
-Adafruit_GFX_Button humidityButton;
-Adafruit_GFX_Button barometerButton;
-Adafruit_GFX_Button tempButton;
-Adafruit_GFX_Button altimeterButton;
-Adafruit_GFX_Button uvButton;
-Adafruit_GFX_Button particulateButton;
-Adafruit_GFX_Button tdsButton;
-Adafruit_GFX_Button turbidityButton;
-Adafruit_GFX_Button waterTempButton;
-
-//create some standard values for sensor button positions and sizes
-int sensorButtonWidth = (display.width() - 4*mainButtonMargin) / 3;
-int sensorButtonHeight = (display.height() - 7*mainButtonMargin) / 6;
-*/
-
-
 
     //start the neopixel
     indicator.begin();
@@ -839,7 +858,29 @@ int sensorButtonHeight = (display.height() - 7*mainButtonMargin) / 6;
     //start the display
     display.begin();
     display.clearDisplay();
-    
+
+    ///*
+    //initialize the RTC and make sure it's good to go
+    if (! rtc.begin())      //try to initialize the i2c connection to the RTC
+    {
+        display.setCursor(100, 100);
+        display.setTextColor(BLACK);
+        display.setTextSize(4);
+        display.println("RTC NOT FOUND");
+        delay(2000);
+    }
+    else if (! rtc.initialized() || rtc.lostPower())
+    {
+        display.setCursor(100, 100);
+        display.setTextColor(BLACK);
+        display.setTextSize(4);
+        display.println("RTC NOT INITIALIZED");
+        delay(2000);
+    }
+    //*/
+    currentTime = rtc.now();
+    displayedTime = currentTime;
+
     //start the SD card reading system
     while (!SD.begin(CS))
     {
@@ -926,7 +967,8 @@ for now just want to get a basic UI running.
     display.setTextColor(BLACK);
     display.println("Fix Acquired.");
     display.refresh();
-    delay(2000);
+    delay(1000);
+    
     drawMainPage(true, true, displayButtonSelection);
     lastDisplayUpdate = millis();
 }
@@ -935,7 +977,8 @@ for now just want to get a basic UI running.
 
 void loop() // run over and over again
 {
-
+    //update rtc time 
+    currentTime = rtc.now();
     
     static int first_run = 0;
     static int sd_failures = 0;
@@ -957,40 +1000,26 @@ void loop() // run over and over again
         Serial.print(GPS.lastNMEA()); // this also sets the newNMEAreceived() flag to false
         if (!GPS.parse(GPS.lastNMEA())) // this also sets the newNMEAreceived() flag to false
             return; // we can fail to parse a sentence in which case we should just wait for another
+            //NEED TO EXPLORE THE BEHAVIOR OF THIS RETURN, IT MIGHT CUT THE WHOLE LOOP SHORT
     }
 
-    //test my new button state controller for the UI
+    //call the function to poll the navigation buttons, update the master state machine and display accordingly
     updateNavButtons();
     if (navigationButton != noPress) {UIStateManager(); lastDisplayUpdate = millis();} //update the UI state if there was a button press and reset the display update timer.
-
+    ///*
+    //DIRTY HACK, but it works for forcing the display to update the time when there's no button press. Time updates appropriately on button presses.
+    else if (displayedTime.minute() < currentTime.minute() && currentUIPage == mainPage) //no button press, but the displayed time minute is wrong now
+    {
+        displayedTime = currentTime;
+        drawMainPage(true, true, displayButtonSelection);               //call the state manager and it should update the time on the appropriate screen automatically
+        lastDisplayUpdate = millis();
+    }
+    //*/
 
     // approximately every 2 seconds or so, print out the current stats
     if (millis() - timer > 2000) 
     {
-        /*
-        //switch which button I have highlighted on the main page to test the state machine. delete later.
-        drawMainPage(true, true, displayButtonSelection);
-        display.setCursor(20,20);
-        display.setTextSize(3);
-        display.setTextColor(BLACK);
-        display.println("State machine!");
-        display.refresh();
-
-        switch (displayButtonSelection)
-        {
-            case setupSensors:
-                displayButtonSelection = startRecording;
-                break;
-            case startRecording:
-                displayButtonSelection = lockScreen;
-                break;
-            case lockScreen:
-                displayButtonSelection = setupSensors;
-                break;
-        }
-        //end test of state machine.
-        */
-
+       
         timer = millis(); // reset the timer
         Serial.print("\nTime: ");
         if (GPS.hour < 10) { Serial.print('0'); }

@@ -904,7 +904,7 @@ String buildRTCLogString(void)
     if (currentTime.hour() < 10) hour = "0" + String(currentTime.hour()); else hour = String(currentTime.hour());
     if (currentTime.second() < 10) second = "0" + String(currentTime.second()); else second = String(currentTime.second());
 
-    String RTCstr = String(currentTime.year()) + "/" + String(currentTime.month()) + "/" + String(currentTime.day()) + "," + hour + ":" + minute + "," + second + ",";
+    String RTCstr = String(currentTime.year()) + "/" + String(currentTime.month()) + "/" + String(currentTime.day()) + "," + hour + ":" + minute + ":" + second + ",";
 
     return RTCstr;
 }
@@ -1237,7 +1237,7 @@ void loop()
         }
         else newLogString = concatLogStrings();
 
-        File dataFile = SD.open("datalog5.txt", FILE_WRITE); //moving this into the loop that happens every 2 seconds seems to have fixed the crashing SD card problem
+        File dataFile = SD.open("datalog6.txt", FILE_WRITE); //moving this into the loop that happens every 2 seconds seems to have fixed the crashing SD card problem
 
         if (dataFile) {dataFile.println(newLogString); dataFile.close();}   //if the file opens, write to it and close the file
         else

@@ -111,6 +111,7 @@ water temp                                  https://www.dfrobot.com/product-1354
 
 #define NUM_SENSORS 11      //number of sensors I'll be logging data with
 #define INDICATOR_MAX_BRIGHTNESS 8
+#define LOG_UPDATE_PERIOD 2000      //update period for the log file in ms (defaulted to 2000ms = 2s)
 
 //note that the TX and RX pins (0 and 1 respectively) are used for the GPS serial
 // define hardware serial port for GPS?
@@ -295,6 +296,21 @@ navButton navigationButton = noPress;                   //initialize state of bu
 bool currentlyRecording = false;                        //set to true when recording is started, set to false when stopped.
 recordingModeFlags recordMode = recordingSteady;        //default to steady record mode. Can also set to recordingBurst
 
+//useful global variables relating to GPS
+//note that I can get magnetic variation from RMC sentences (part 10 of RMC)
+char gpsSentence;           //the NMEA sentence that gets refreshed by GPS.read()
+String gpsLogString;        //the String that I'll put together for recording in the log file
+int displayGPSFixQuality;       //0 - invalid; 1 - gps fix; 2 - differential gps fix
+int displayGPSSatellites;       //number of satellites
+nmea_float_t displayLatitude;   //latitude in DDMM.MMMM
+nmea_float_t displayLongitude;  //longitude in DDDMM.MMMM
+char displayLatCardinal;        //the E/W component of the longitude reading
+char displayLongCardinal;       //the N/S component of the latitude reading
+bool parseSucceeded;               //a flag for tracking whether or not the lastNMEA parse succeeded. Don't want to try to read data from a failed parse.
+
+//global vars for data logging
+String newLogString;
+bool firstRun = true;
 
 void drawDateTimeUIElement(int x, int y)
 {
@@ -776,6 +792,7 @@ void UIStateManager(void)
                         currentUIPage = mainPage;
                         currentlyRecording = false;     //set the currentlyRecording flag to false to indicated to rest of program to stop record
                         displayButtonSelection = drawMainPage(true, true, setupSensors);
+                        firstRun = true;                //reset the first run flag so I can see if a new log header gets built each time
                     }
                     break;
                 case lockScreen:
@@ -820,9 +837,138 @@ void UIStateManager(void)
     }
 }
 
+//Utility functions for building data strings that will be put into log files
 
+//read the GPS and return a string of appropriate data that will go into the log file
+String buildGPSLogString(void)
+{
+    
+    if (parseSucceeded)
+    {
+        if (GPS.fix)
+        {
+            gpsLogString = String((int)GPS.fix) + "," + String((int)GPS.fixquality) + "," + String(GPS.satellites) + ","
+                                + String(GPS.latitude) + String(GPS.lat) + "," + String(GPS.longitude) + String(GPS.lon) + ","
+                                + String(GPS.altitude) + "," + String(GPS.angle) + "," + String(GPS.speed) + "," + String(GPS.magvariation) + ",";
+        }
+        else
+        {
+            String gpsLogString = "No fix,-,-,-,-,-,-,-,-,";
+        }
+    }
+    else   //if parse failed
+    {
+        String gpsLogString = "Failed parse,-,-,-,-,-,-,-,-,";
+    }
+    return gpsLogString;
+    
+    /*
+    String dataString = "";
 
-uint32_t timer = millis();   //used for timing the updates on the Serial monitor and the logfile
+    gpsSentence = GPS.read();
+    if (GPS.newNMEAreceived())  //if new sentence is received, try to parse it
+    {
+        if (GPS.parse(GPS.lastNMEA()))   
+        {
+            if (GPS.fix)
+            {
+                String dataString = String((int)GPS.fix) + "," + String((int)GPS.fixquality) + "," + String(GPS.satellites) + ","
+                                + String(GPS.latitude) + String(GPS.lat) + "," + String(GPS.longitude) + String(GPS.lon) + ","
+                                + String(GPS.altitude) + "," + String(GPS.angle) + "," + String(GPS.speed) + "," + String(GPS.magvariation) + ",";
+            }
+            else
+            {
+                String dataString = "No fix,-,-,-,-,-,-,-,-,";
+            }
+        }
+        else   //if parse failed
+        {
+            String dataString = "Failed parse,-,-,-,-,-,-,-,-,";
+        }
+    }
+    else
+    {
+        String dataString = "No NMEA received,-,-,-,-,-,-,-,-,";
+    }
+    return dataString;
+    */
+}
+
+//build log string for real time clock
+String buildRTCLogString(void)
+{
+    String hour;
+    String minute;
+    String second;
+    if (currentTime.minute() < 10) minute = "0" + String(currentTime.minute()); else minute = String(currentTime.minute());
+    if (currentTime.hour() < 10) hour = "0" + String(currentTime.hour()); else hour = String(currentTime.hour());
+    if (currentTime.second() < 10) second = "0" + String(currentTime.second()); else second = String(currentTime.second());
+
+    String RTCstr = String(currentTime.year()) + "/" + String(currentTime.month()) + "/" + String(currentTime.day()) + "," + hour + ":" + minute + "," + second + ",";
+
+    return RTCstr;
+}
+
+//build the header for the new log file. Look through the sensors enum to see which are enabled, then put together appropriate header
+String buildLogHeaderString(void)
+{
+    //RTC,GPS,Temperature,Barometer,Altimeter,Humidity,UV,Particulate,IMU,TDS,Turbidity,WaterTemp
+    String logHeader = "Date,Time,";   //always start with the RTC timestamp
+        //For GPS header section:
+    String gpsString = "Fix,Fix Quality,Satellites,Latitude,Longitude,Altitude,Angle,Speed,Magnetic Variation,";
+    String tempString = "Air Temp (C),";
+    String baroString = "Pressure (hPa),";
+    String altString = "Barometric Altitude (m),";
+    String humidityString = "Humidity,";
+    String uvString = "UV Index,";
+    String partString = "PM1.0,PM2.5,PM10.0,";       //air quality
+    String imuString = "Roll,Pitch,";                //I think this is all I'll want for measuring angle of repose
+    String tdsString = "TDS,";
+    String turbString = "Turbidity,";
+    String waterTempString = "Water Temp (C),";
+    
+    if (sensors.GPS) logHeader += gpsString;
+    if (sensors.temp) logHeader += tempString;
+    if (sensors.barometer) logHeader += baroString;
+    if (sensors.altimeter) logHeader += altString;
+    if (sensors.humidity) logHeader += humidityString;
+    if (sensors.UV) logHeader += uvString;
+    if (sensors.particulate) logHeader += partString;
+    if (sensors.IMU) logHeader += imuString;
+    if (sensors.TDS) logHeader += tdsString;
+    if (sensors.turbidity) logHeader += turbString;
+    if (sensors.waterTemp) logHeader += waterTempString;
+
+    return logHeader;    
+}
+
+//function to combine all relevant log strings for writing to the log file
+String concatLogStrings(void)
+{
+    //cycle through the sensors enum to see which are enabled, then concatenate them all in order.
+    //note that all log strings generated by other functions should end in commas.
+    //always same order:
+    //RTC,GPS,Temperature,Barometer,Altimeter,Humidity,UV,Particulate,IMU,TDS,Turbidity,WaterTemp
+
+    String logString = buildRTCLogString();     //put in the time stamp right away
+    //if (sensors.GPS) {gpsLogString = buildGPSLogString(); logString += gpsLogString;}
+    if (sensors.GPS) {buildGPSLogString(); logString += gpsLogString;}          //I think += can't use the return of a function call for appending a string? had to set global var
+    if (sensors.temp) logString += "temp test";
+    //if (sensors.barometer) logString += 
+    //if (sensors.altimeter) logString += 
+    //if (sensors.humidity) logString += 
+    //if (sensors.UV) logString += 
+    //if (sensors.particulate) logString += 
+    //if (sensors.IMU) logString += 
+    //if (sensors.TDS) logString += 
+    //if (sensors.turbidity) logString += 
+    //if (sensors.waterTemp) logString += 
+
+    return logString;
+}
+
+unsigned long timer = millis();   //used for timing the updates on the Serial monitor and the logfile
+unsigned long lastLogUpdate = millis();
 unsigned long lastDisplayUpdate;
 unsigned long lastRTCread = millis();   //keep track of when the RTC was last read from. Not sure if I need this yet.
             
@@ -931,8 +1077,14 @@ void setup()
     while (!SD.begin(CS))
     {
         Serial.println("Card failed, or not present");
+        display.setCursor(10, 100);
+        display.setTextColor(BLACK);
+        display.setTextSize(3);
+        display.println("SD Failed");
+        display.refresh();
         indicator.setPixelColor(0, indicator.Color(255, 0, 0)); //set indicator to red
         indicator.show();
+        delay(1000);
     }
 
     // 9600 NMEA is the default baud rate for Adafruit MTK GPS's- some use 4800
@@ -959,7 +1111,7 @@ I think that just means another substate system tracking GPS status and modifyin
 for now just want to get a basic UI running. 
 */
 //******************************************************************************//
-
+/*
 
     // read data from the GPS to update the GPS.fix flag
     char c = GPS.read();
@@ -972,9 +1124,10 @@ for now just want to get a basic UI running.
             return; // we can fail to parse a sentence in which case we should just wait for another
     }
 
+*/
     //set indicator to yellow to show waiting for first fix
-    indicator.setPixelColor(0, yellow);
-    indicator.show();
+    //indicator.setPixelColor(0, yellow);
+    //indicator.show();
 
     //test the display functions here
     //drawMainPage(true, false, displayButtonSelection);
@@ -982,44 +1135,17 @@ for now just want to get a basic UI running.
     display.setCursor(20,20);
     display.setTextSize(3);
     display.setTextColor(BLACK);
-    display.println("Waiting for GPS fix.");
+    display.println("Initialized.");
     display.refresh();
 
-    //////////////////////////////////////////////////////////////////////////////////////////
-    // FORCING GPS FIX SO I CAN TEST STATE MACHINE INDOORS//
-    ///////////////////////////////////////////////////////////
-    //if (FORCE_GPS_FIX) {GPS.fix = true; delay(1000);}
-    delay(1000);
-    //try this version of bypassing the waiting for fix period for now. going to move this block elsewhere later
-    if (! FORCE_GPS_FIX)
-    {
-        while (!GPS.fix)  //this should break once a GPS fix is established.
-        {
-            indicator.setPixelColor(0, yellow);
-            indicator.show();
-
-            //read from the GPS stream to update the GPS.fix flag
-            char c = GPS.read();
-            if (GPS.newNMEAreceived()) 
-            {
-                //The following bit of code seems to update the GPS.fix flag (I think GPS.read() alone isn't enough.)
-                //However, I don't know why this works yet.
-                GPS.parse(GPS.lastNMEA());
-            }
-        }
-    }
-    //drawMainPage(true, true, displayButtonSelection);
-    display.clearDisplay();
-    display.setCursor(20,20);
-    display.setTextSize(3);
-    display.setTextColor(BLACK);
-    FORCE_GPS_FIX ? display.println("Fix Bypassed.") : display.println("Fix Acquired.");
-    display.refresh();
     delay(1000);
     
     drawMainPage(true, true, displayButtonSelection);
     lastDisplayUpdate = millis();
 }
+
+
+
 
 //******************************************************************************//
 
@@ -1028,9 +1154,10 @@ void loop()
     //update rtc time 
     currentTime = rtc.now();
     
-    static int first_run = 0;
+    //static int first_run = 0;
+    
     static int sd_failures = 0;
-    static unsigned long write_num = 0;
+    //static unsigned long write_num = 0;
      
     String dataString = "";     //the string of data that I'll write to each line of the logfile
 
@@ -1079,36 +1206,67 @@ void loop()
         }
     }
 
-
-
-    //***********************************************************************//
-    //***********************************************************************//
-    /*
-        I need to modify the GPS reading routine. Especially since the 'return' in the following if statements
-        will skip everything after it in the main loop if it gets called. 
-        I do need to make sure that I can actually parse good GPS data before reading it or trying to record it
-        to SD, but I don't want to break the whole loop early.
-    */
-    //***********************************************************************//
-    //***********************************************************************//
-
-    // read data from the GPS in the 'main loop'
-    char c = GPS.read();
-    // if you want to debug, this is a good time to do it!
-    if (GPSECHO)
-        if (c) Serial.print(c);
-            // if a sentence is received, we can check the checksum, parse it...
-    if (GPS.newNMEAreceived()) 
+    //read the GPS and see if there's new data to parse
+    //I read the GPS library source, and I basically have to call these functions repeatedly to not miss data.
+    //Run this as frequently as possible and it will keep things like GPS.fix updated.
+    gpsSentence = GPS.read();
+    if (GPS.newNMEAreceived())  //if new sentence is received, try to parse it
     {
-        // a tricky thing here is if we print the NMEA sentence, or data
-        // we end up not listening and catching other sentences!
-        // so be very wary if using OUTPUT_ALLDATA and trying to print out data
-        Serial.print(GPS.lastNMEA()); // this also sets the newNMEAreceived() flag to false
-        if (!GPS.parse(GPS.lastNMEA())) // this also sets the newNMEAreceived() flag to false
-            return; // we can fail to parse a sentence in which case we should just wait for another
-            //NEED TO EXPLORE THE BEHAVIOR OF THIS RETURN, IT MIGHT CUT THE WHOLE LOOP SHORT
+        if (GPS.parse(GPS.lastNMEA())) parseSucceeded = true; else parseSucceeded = false;
+        //parseSucceeded = GPS.parse(GPS.lastNMEA());    //this will try to parse the sentence, sets the parseSucceeded flag to true if the parse worked.    
+    }
+    //GPS.fix ? indicator.setPixelColor(0, green) : indicator.setPixelColor(0, pink);     //set the indicator to green or pink to show GPS fix acquired/lost
+
+    if (millis() >= timer + 1000)
+    {
+        GPS.fix ? indicator.setPixelColor(0, green) : indicator.setPixelColor(0, pink);
+        indicator.show();
+        timer = millis();
     }
 
+    //if currentlyRecording, go through each enabled sensor and collect data into a string
+    //open the appropriate file on the sd card
+    //write data
+    //close file
+    if (currentlyRecording && (lastLogUpdate + LOG_UPDATE_PERIOD <= millis()))      //if recording is live and it's time for another update
+    {
+        if (firstRun)
+        {
+            newLogString = buildLogHeaderString();
+            firstRun = false;
+        }
+        else newLogString = concatLogStrings();
+
+        File dataFile = SD.open("datalog5.txt", FILE_WRITE); //moving this into the loop that happens every 2 seconds seems to have fixed the crashing SD card problem
+
+        if (dataFile) {dataFile.println(newLogString); dataFile.close();}   //if the file opens, write to it and close the file
+        else
+        {
+            sd_failures++;
+            if (sd_failures > 5) //if unable to write to SD file more than 5 times, medium flash alternating red and blue to show SD card problem
+            {
+                display.setCursor(10, 100);
+                display.setTextSize(3);
+                display.setTextColor(BLACK);
+                display.println("SD Card Error");
+                while (true)
+                {
+                    indicator.setPixelColor(0, indicator.Color(255, 0, 0));
+                    indicator.show();
+                    delay(250);
+                    indicator.setPixelColor(0, indicator.Color(0, 0, 255));
+                    indicator.show();
+                    delay(250);
+                }
+            }
+        }
+        lastLogUpdate = millis();       //reset the log update timer
+    }
+
+
+
+
+    /*
     // approximately every 2 seconds or so, print out the current stats
     if (millis() - timer > 2000) 
     {
@@ -1194,4 +1352,7 @@ void loop()
             indicator.show();
         }
     }
+
+    */
+
 }

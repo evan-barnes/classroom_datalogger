@@ -19,6 +19,9 @@ To do:
     delayed until I actually tell the system to start recording. Once I tell it to start recording, I want it to check for and wait for a GPS fix before switching to the 
     recording state and UI page. I'll need a subpage of the recording page that displays "Waiting for GPS fix" until a fix is established, and then switches to "recording active"
     when a fix is established.
+    ----also add appropriate indicators to the lock screen to show if it's recording or not
+--Break time display UI element into its own function, add time display to lock page and recording page
+--Maybe even add a display element to the recording page that shows which sensors are being logged
 
 
 Things I'd like to add:
@@ -103,6 +106,9 @@ water temp                                  https://www.dfrobot.com/product-1354
 #define FORCE_GPS_FIX true  //set to true for indoor testing (skips over the part where it waits for a fix)
 #define FORCE_RECORDING_STATE_SWITCH false   //switches the currentlyRecording flag every time the lock screen is entered so I can test that
                                             //the state machine properly hands off to the correct UI page based on recording state
+#define STOP_RECORDING_IF_FIX_LOST false    //set to true if you want to stop the record if the GPS is enabled and the fix is lost.
+                                            //set false if you want to keep recording in spite of lost GPS fix.
+
 #define NUM_SENSORS 11      //number of sensors I'll be logging data with
 #define INDICATOR_MAX_BRIGHTNESS 8
 
@@ -152,10 +158,11 @@ const int mainButtonHeight = (display.height() - 2*mainButtonMargin) / 4;
 
 enum masterUIState
 {
-    mainPage,       //on restart, not recording. has 3 buttons: setup, record, lock screen. Maybe also power off/sleep? Dont' know how to do that one yet.
-    setupPage,          //choose which sensors to enable for logging
-    recordingPage,      //the page that displays when recording. has two buttons: stop recording, lock screen.
-    lockPage            //show some info (e.g., recording in progress, altitude, whatever). One button: press and hold 3 seconds to unlock.
+    mainPage,                   //on restart, not recording. has 3 buttons: setup, record, lock screen. Maybe also power off/sleep? Dont' know how to do that one yet.
+    setupPage,                  //choose which sensors to enable for logging
+    recordingPage,              //the page that displays when actively recording. has two buttons: stop recording, lock screen.
+    recordingWaitingPage,       //the page that shows when user starts recording and GPS is enabled, but no GPS fix is available yet.
+    lockPage                    //show some info (e.g., recording in progress, altitude, whatever). One button: press and hold 3 seconds to unlock.
 };
 
 //feel like I may need other sub-enums to deal with button states on each page for driving display. need to highlight button selections, etc.
@@ -289,6 +296,23 @@ bool currentlyRecording = false;                        //set to true when recor
 recordingModeFlags recordMode = recordingSteady;        //default to steady record mode. Can also set to recordingBurst
 
 
+void drawDateTimeUIElement(int x, int y)
+{
+    display.setCursor(x, y);
+    display.setTextSize(2);
+    display.setTextColor(BLACK);
+    display.println(daysOfTheWeek[displayedTime.dayOfTheWeek()]);
+    display.setCursor(x, y+20);
+    displayedTime.hour() > 12 ? display.print(displayedTime.hour() - 12) : display.print(displayedTime.hour());
+    display.print(":");
+    if (displayedTime.minute() < 10) {display.print("0"); display.print(displayedTime.minute());} else display.print(displayedTime.minute());
+    if (displayedTime.hour() > 11) display.print("p");
+    display.print(", ");
+    display.print(displayedTime.month());
+    display.print("/");
+    display.println(displayedTime.day());
+}
+
 displayButtons drawSensorSetupButtons(displayButtons selected)
 {
     /*possible values of selected button that will be passed in:
@@ -367,21 +391,8 @@ displayButtons drawMainPage(bool initialClear, bool refresh, displayButtons sele
     display.setTextSize(3);
     display.setTextColor(BLACK);
     display.println("Main Menu.");
-    ///*
-    //display the time in the upper right corner. update every time the minute changes
-    display.setCursor(260, 10);
-    display.setTextSize(2);
-    display.setTextColor(BLACK);
-    display.println(daysOfTheWeek[displayedTime.dayOfTheWeek()]);
-    display.setCursor(260, 30);
-    display.print(displayedTime.hour());
-    display.print(":");
-    display.print(displayedTime.minute());
-    display.print(", ");
-    display.print(displayedTime.month());
-    display.print("/");
-    display.println(displayedTime.day());
-    //*/
+
+    drawDateTimeUIElement(250, 10);
 
     switch (selectedButton)
     {
@@ -450,17 +461,17 @@ displayButtons drawSensorSetupPage(bool initialClear, bool refresh, displayButto
     return selectedButton;
 }
 
+//draw the actively recording page
 displayButtons drawRecordingPage(bool initialClear, bool refresh, displayButtons selectedButton)
 {
-    //placeholder 
-    //UI buttons: stop recording, lock screen
-    
 
     if (initialClear) display.clearDisplay();
-    display.setCursor(20,20);
+    display.setCursor(10,10);
     display.setTextSize(3);
     display.setTextColor(BLACK);
-    display.println("Recording Test Page");
+    display.println("Recording.");
+
+    drawDateTimeUIElement(250, 10);
 
     switch (selectedButton)
     {
@@ -478,15 +489,32 @@ displayButtons drawRecordingPage(bool initialClear, bool refresh, displayButtons
     return selectedButton;
 }
 
+//draw the recording page that shows when GPS is enabled but no fix is yet available
+displayButtons drawRecordingWaitingPage(bool initialClear, bool refresh, displayButtons selectedButton)
+{
+    if (initialClear) display.clearDisplay();
+    display.setCursor(10, display.height() / 2 - 30);
+    display.setTextSize(3);
+    display.setTextColor(BLACK);
+    display.println("Waiting for GPS fix.");
+    drawDateTimeUIElement(250, 10);
+    //for now, decided to remove option to lock screen on the waiting for GPS fix and waiting to record page. complicated things too much.
+    recordingPageButtons[0].drawButton(true);           //draw the stop recording button selected
+    if (refresh) display.refresh();
+    return selectedButton;
+}
+
 
 displayButtons drawLockPage(bool initialClear, bool refresh, displayButtons selectedButton)
 {
-    //placeholder 
+
     if (initialClear) display.clearDisplay();
-    display.setCursor(20,20);
+    display.setCursor(10,10);
     display.setTextSize(3);
     display.setTextColor(BLACK);
-    display.println("Lock Test Page");
+    display.println("Locked.");
+    
+    drawDateTimeUIElement(250, 10);
 
     unlockButton.drawButton(true);      //only the unlock button is available, so always draw it, always highlight
 
@@ -532,10 +560,6 @@ void UIStateManager(void)
     switch (currentUIPage) //first figure out what UI page I'm on (main, setup, recording, lock)
     {
         case mainPage:  //if I'm on the main page, determine which display button to highlight
-            //if (displayedTime.minute() < currentTime.minute() && navigationButton == noPress)
-            //{
-
-            //}
             switch (displayButtonSelection) //look at the current button selection so that I can know where to move the button based on the nav direction
             {
                 case setupSensors:
@@ -553,11 +577,22 @@ void UIStateManager(void)
                 case startRecording:
                     if (navigationButton == rightSingleClick) displayButtonSelection = drawMainPage(true, true, lockScreen);
                     else if (navigationButton == leftSingleClick) displayButtonSelection = drawMainPage(true, true, setupSensors);
+                    //if I tell the UI to start recording                    
                     else if (navigationButton == centerSingleClick)
                     {
-                        currentUIPage = recordingPage;
-                        currentlyRecording = true;  //set the currently recording flag to true to indicate to rest of program to start recording
-                        displayButtonSelection = drawRecordingPage(true, true, lockScreen);
+                        if (sensors.GPS && (! GPS.fix))    //if gps is enabled but there's no fix yet, go to the recordingWaitingPage
+                        {
+                            currentUIPage = recordingWaitingPage;
+                            currentlyRecording = false;
+                            displayButtonSelection = drawRecordingWaitingPage(true, true, stopRecording);   //only this one button available on that page
+                        }
+                        else    //either gps isn't enabled, or it is and there's a fix
+                        {
+                            currentUIPage = recordingPage;
+                            currentlyRecording = true;  //set the currently recording flag to true to indicate to rest of program to start recording
+                            displayButtonSelection = drawRecordingPage(true, true, lockScreen);
+                        }
+                        
                     }
                     break;
                 case lockScreen:
@@ -754,6 +789,16 @@ void UIStateManager(void)
             }
             navigationButton = noPress;
             break;
+        case recordingWaitingPage:
+            if (navigationButton == centerSingleClick)
+            {
+                currentUIPage = mainPage;
+                currentlyRecording = false;
+                displayButtonSelection = drawMainPage(true,true, setupSensors);
+            }
+            
+            navigationButton = noPress;
+            break;
         case lockPage:
             if (navigationButton == centerLongPress)
             {
@@ -762,6 +807,7 @@ void UIStateManager(void)
                     currentUIPage = recordingPage;
                     displayButtonSelection = drawRecordingPage(true, true, lockScreen);
                 }
+                
                 else                        //if not recording, return to main menu
                 {
                     currentUIPage = mainPage;   
@@ -942,30 +988,32 @@ for now just want to get a basic UI running.
     //////////////////////////////////////////////////////////////////////////////////////////
     // FORCING GPS FIX SO I CAN TEST STATE MACHINE INDOORS//
     ///////////////////////////////////////////////////////////
-    if (FORCE_GPS_FIX) {GPS.fix = true; delay(1000);}
-
-
-    while (!GPS.fix)  //this should break once a GPS fix is established.
+    //if (FORCE_GPS_FIX) {GPS.fix = true; delay(1000);}
+    delay(1000);
+    //try this version of bypassing the waiting for fix period for now. going to move this block elsewhere later
+    if (! FORCE_GPS_FIX)
     {
-        indicator.setPixelColor(0, yellow);
-        indicator.show();
-
-        //read from the GPS stream to update the GPS.fix flag
-        char c = GPS.read();
-        if (GPS.newNMEAreceived()) 
+        while (!GPS.fix)  //this should break once a GPS fix is established.
         {
-            //The following bit of code seems to update the GPS.fix flag (I think GPS.read() alone isn't enough.)
-            //However, I don't know why this works yet.
-            GPS.parse(GPS.lastNMEA());
+            indicator.setPixelColor(0, yellow);
+            indicator.show();
+
+            //read from the GPS stream to update the GPS.fix flag
+            char c = GPS.read();
+            if (GPS.newNMEAreceived()) 
+            {
+                //The following bit of code seems to update the GPS.fix flag (I think GPS.read() alone isn't enough.)
+                //However, I don't know why this works yet.
+                GPS.parse(GPS.lastNMEA());
+            }
         }
     }
-
     //drawMainPage(true, true, displayButtonSelection);
     display.clearDisplay();
     display.setCursor(20,20);
     display.setTextSize(3);
     display.setTextColor(BLACK);
-    display.println("Fix Acquired.");
+    FORCE_GPS_FIX ? display.println("Fix Bypassed.") : display.println("Fix Acquired.");
     display.refresh();
     delay(1000);
     
@@ -975,7 +1023,7 @@ for now just want to get a basic UI running.
 
 //******************************************************************************//
 
-void loop() // run over and over again
+void loop() 
 {
     //update rtc time 
     currentTime = rtc.now();
@@ -985,6 +1033,64 @@ void loop() // run over and over again
     static unsigned long write_num = 0;
      
     String dataString = "";     //the string of data that I'll write to each line of the logfile
+
+    //call the function to poll the navigation buttons, update the master state machine and display accordingly
+    updateNavButtons();
+    if (navigationButton != noPress) {UIStateManager(); lastDisplayUpdate = millis();} //update the UI state if there was a button press and reset the display update timer.
+    //Otherwise, if trying to record but waiting for GPS fix and fix suddenly acquired, switch from recordingWaitingPage to recordingPage
+    else if (currentUIPage == recordingWaitingPage && GPS.fix)
+    {
+        displayedTime = currentTime;
+        lastDisplayUpdate = millis();
+        currentUIPage = recordingPage;
+        displayButtonSelection = drawRecordingPage(true, true, lockScreen);
+        currentlyRecording = true;
+    }
+    //If recording is active and GPS fix is lost, stop recording?
+    else if (STOP_RECORDING_IF_FIX_LOST && currentlyRecording && sensors.GPS && (! GPS.fix))    //lost fix while recording GPS and want to stop recording if that happens
+    {
+        displayedTime = currentTime;
+        lastDisplayUpdate = millis();
+        currentlyRecording = false;         //stop recording
+        currentUIPage = mainPage;
+        displayButtonSelection = drawMainPage(true, true, setupSensors);
+    }
+    //Force the display to update the time when there's no button press. Time updates appropriately on button presses.
+    else if (displayedTime.minute() != currentTime.minute())
+    {
+        displayedTime = currentTime;
+        lastDisplayUpdate = millis();
+        switch (currentUIPage)
+        {
+        case mainPage:
+            drawMainPage(true, true, displayButtonSelection);               //call the state manager and it should update the time on the appropriate screen automatically
+            break;
+        case recordingPage:
+            drawRecordingPage(true, true, displayButtonSelection);
+            break;
+        case recordingWaitingPage:
+            drawRecordingWaitingPage(true, true, displayButtonSelection);
+            break;
+        case lockPage:
+            drawLockPage(true, true, displayButtonSelection);
+            break;
+        default:
+            break;
+        }
+    }
+
+
+
+    //***********************************************************************//
+    //***********************************************************************//
+    /*
+        I need to modify the GPS reading routine. Especially since the 'return' in the following if statements
+        will skip everything after it in the main loop if it gets called. 
+        I do need to make sure that I can actually parse good GPS data before reading it or trying to record it
+        to SD, but I don't want to break the whole loop early.
+    */
+    //***********************************************************************//
+    //***********************************************************************//
 
     // read data from the GPS in the 'main loop'
     char c = GPS.read();
@@ -1002,19 +1108,6 @@ void loop() // run over and over again
             return; // we can fail to parse a sentence in which case we should just wait for another
             //NEED TO EXPLORE THE BEHAVIOR OF THIS RETURN, IT MIGHT CUT THE WHOLE LOOP SHORT
     }
-
-    //call the function to poll the navigation buttons, update the master state machine and display accordingly
-    updateNavButtons();
-    if (navigationButton != noPress) {UIStateManager(); lastDisplayUpdate = millis();} //update the UI state if there was a button press and reset the display update timer.
-    ///*
-    //DIRTY HACK, but it works for forcing the display to update the time when there's no button press. Time updates appropriately on button presses.
-    else if (displayedTime.minute() < currentTime.minute() && currentUIPage == mainPage) //no button press, but the displayed time minute is wrong now
-    {
-        displayedTime = currentTime;
-        drawMainPage(true, true, displayButtonSelection);               //call the state manager and it should update the time on the appropriate screen automatically
-        lastDisplayUpdate = millis();
-    }
-    //*/
 
     // approximately every 2 seconds or so, print out the current stats
     if (millis() - timer > 2000) 

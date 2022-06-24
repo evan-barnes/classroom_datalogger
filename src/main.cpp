@@ -42,6 +42,9 @@ General notes:
         it set by using the example sketch for the RTC that comes with the RTCLib. It sets the clock from the computer clock time at compile, so it's like 20 seconds 
         behind, but that's good enough. I have the battery backup installed, so I should be set on time for a long time. Note that the RTC doesn't account for DST,
         so I will eventually have to automate that myself somehow.
+    --the problem with the SD card was that I have to limit myself to 8 character names using the SD library. I can solve this by switching to SDFat library...
+        Temporarily, or maybe permenantly, solved this file name problem. Still using standard SD library. I encoded the months and hours in the file names with letters,
+        which lets me get month, day, hour, minute, tens of seconds, and record mode into the file name.
 */
 
 /*
@@ -310,7 +313,11 @@ bool parseSucceeded;               //a flag for tracking whether or not the last
 
 //global vars for data logging
 String newLogString;
-bool firstRun = true;
+bool startNewLogFile = true;
+String logFileNameString;                   //Using string to assemble the name of the log file before converting it the char array
+char logFileNameArray[50];                  //converted char array of log file name (to be used with the SD file.open command)
+
+
 
 void drawDateTimeUIElement(int x, int y)
 {
@@ -792,7 +799,7 @@ void UIStateManager(void)
                         currentUIPage = mainPage;
                         currentlyRecording = false;     //set the currentlyRecording flag to false to indicated to rest of program to stop record
                         displayButtonSelection = drawMainPage(true, true, setupSensors);
-                        firstRun = true;                //reset the first run flag so I can see if a new log header gets built each time
+                        startNewLogFile = true;                //reset the first run flag so I can see if a new log header gets built each time
                     }
                     break;
                 case lockScreen:
@@ -861,37 +868,7 @@ String buildGPSLogString(void)
         String gpsLogString = "Failed parse,-,-,-,-,-,-,-,-,";
     }
     return gpsLogString;
-    
-    /*
-    String dataString = "";
 
-    gpsSentence = GPS.read();
-    if (GPS.newNMEAreceived())  //if new sentence is received, try to parse it
-    {
-        if (GPS.parse(GPS.lastNMEA()))   
-        {
-            if (GPS.fix)
-            {
-                String dataString = String((int)GPS.fix) + "," + String((int)GPS.fixquality) + "," + String(GPS.satellites) + ","
-                                + String(GPS.latitude) + String(GPS.lat) + "," + String(GPS.longitude) + String(GPS.lon) + ","
-                                + String(GPS.altitude) + "," + String(GPS.angle) + "," + String(GPS.speed) + "," + String(GPS.magvariation) + ",";
-            }
-            else
-            {
-                String dataString = "No fix,-,-,-,-,-,-,-,-,";
-            }
-        }
-        else   //if parse failed
-        {
-            String dataString = "Failed parse,-,-,-,-,-,-,-,-,";
-        }
-    }
-    else
-    {
-        String dataString = "No NMEA received,-,-,-,-,-,-,-,-,";
-    }
-    return dataString;
-    */
 }
 
 //build log string for real time clock
@@ -907,6 +884,65 @@ String buildRTCLogString(void)
     String RTCstr = String(currentTime.year()) + "/" + String(currentTime.month()) + "/" + String(currentTime.day()) + "," + hour + ":" + minute + ":" + second + ",";
 
     return RTCstr;
+}
+
+String buildNewLogFileName(void)
+{
+    /*
+    Ok, this feels like an INSANE hack, but I can make the 8 character filename limit work if I encode numbers as letters. The format I want for the name
+    is something like yyyy-mm-dd-hh:mm:ss_recordingmode. Right now I can get away without year, so just mm-dd-hh:mm:ss_recordmode. 
+    For months and hours, there are less than 26 options, so I can encode each month and hour as a single letter (A=0,B=1,C=2...).
+    For days, minutes, and seconds there are too many possibilities, so I can just leave them as numbers.
+    So for today's recording on 6/23/2022 at 22:50:37 in Steady mode:
+    G23W503S.csv
+    This encodes: G=6, W=22, S @end = Steady. So 6/23 at 22:50 at 30 seconds in Steady mode
+
+    How to make the code:
+    For month: zero index alphabet (A=0, B=1...) and substitute that for month. So range of B to M inclusive.
+    For day: two integers
+    For hour (24 hour time): Zero index alphabet (A=0) for a range from A to X inclusive
+    for minute: two integers
+    For seconds: one integer to represent the 10s place of seconds (e.g., 37 seconds gets represented as a 3)
+    For record mode: S or B to represent Steady or Burst
+    Extension: .csv
+
+    I'll be post-processing these files with Python scripts anyway, so I can first have a script go through all the files and rename them
+    to their expanded forms so that they're more readable. 
+
+    */
+    
+    //char alphacode[27] = {"A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z"};
+    char alphacode[27] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    String outstring = String(alphacode[currentTime.month()]) + String(currentTime.day()) + String(alphacode[currentTime.hour()]) + String(currentTime.minute());
+    int sec = currentTime.second() / 10;
+    outstring += String(sec);
+    String recordModeString;
+    if (recordMode == recordingSteady) recordModeString = "S"; else recordModeString = "B";
+    outstring += recordModeString + ".csv";
+    return outstring;
+    
+    
+    
+    /*
+    String hour;
+    String minute;
+    String second;
+    String month;
+    String day;
+    String recordModeString;
+
+    if (currentTime.month() < 10) month = "0" + String(currentTime.month()); else month = String(currentTime.month());
+    if (currentTime.day() < 10) day = "0" + String(currentTime.day()); else day = String(currentTime.day());
+    if (currentTime.minute() < 10) minute = "0" + String(currentTime.minute()); else minute = String(currentTime.minute());
+    if (currentTime.hour() < 10) hour = "0" + String(currentTime.hour()); else hour = String(currentTime.hour());
+    if (currentTime.second() < 10) second = "0" + String(currentTime.second()); else second = String(currentTime.second());
+    if (recordMode == recordingSteady) recordModeString = "STEADY"; else recordModeString = "BURST";
+    
+    outstring = String(currentTime.year()) + "-" + month + "-" + day + "_" + recordModeString + ".csv";
+    return outstring;
+    */
+    //return logFileNameString;
+    
 }
 
 //build the header for the new log file. Look through the sensors enum to see which are enabled, then put together appropriate header
@@ -1230,19 +1266,28 @@ void loop()
     //close file
     if (currentlyRecording && (lastLogUpdate + LOG_UPDATE_PERIOD <= millis()))      //if recording is live and it's time for another update
     {
-        if (firstRun)
+        if (startNewLogFile)            //if starting a new log file (which currently will happen every time recording is stopped and restarted)
         {
+            //first create the name of the new log file
+            logFileNameString = buildNewLogFileName();              //actually make the string object for the name. currently updates global var
+            //logFileNameString.toCharArray(logFileNameArray, 50);    //convert to char array to be used when opening the SD file
             newLogString = buildLogHeaderString();
-            firstRun = false;
+            startNewLogFile = false;
         }
         else newLogString = concatLogStrings();
 
-        File dataFile = SD.open("datalog6.txt", FILE_WRITE); //moving this into the loop that happens every 2 seconds seems to have fixed the crashing SD card problem
+        File dataFile = SD.open(logFileNameString, FILE_WRITE); //moving this into the loop that happens every 2 seconds seems to have fixed the crashing SD card problem
 
         if (dataFile) {dataFile.println(newLogString); dataFile.close();}   //if the file opens, write to it and close the file
         else
         {
             sd_failures++;
+            display.setCursor(10, 100);
+            display.setTextSize(3);
+            display.setTextColor(BLACK);
+            display.print("SD Failure: ");
+            display.println(sd_failures);
+            display.refresh();
             if (sd_failures > 5) //if unable to write to SD file more than 5 times, medium flash alternating red and blue to show SD card problem
             {
                 display.setCursor(10, 100);
@@ -1264,95 +1309,5 @@ void loop()
     }
 
 
-
-
-    /*
-    // approximately every 2 seconds or so, print out the current stats
-    if (millis() - timer > 2000) 
-    {
-       
-        timer = millis(); // reset the timer
-        Serial.print("\nTime: ");
-        if (GPS.hour < 10) { Serial.print('0'); }
-        Serial.print(GPS.hour, DEC); Serial.print(':');
-        if (GPS.minute < 10) { Serial.print('0'); }
-        Serial.print(GPS.minute, DEC); Serial.print(':');
-        if (GPS.seconds < 10) { Serial.print('0'); }
-        Serial.print(GPS.seconds, DEC); Serial.print('.');
-        if (GPS.milliseconds < 10) 
-        {
-            Serial.print("00");
-        } else if (GPS.milliseconds > 9 && GPS.milliseconds < 100) 
-        {
-            Serial.print("0");
-        }
-        Serial.println(GPS.milliseconds);
-        Serial.print("Date: ");
-        Serial.print(GPS.day, DEC); Serial.print('/');
-        Serial.print(GPS.month, DEC); Serial.print("/20");
-        Serial.println(GPS.year, DEC);
-        Serial.print("Fix: "); Serial.print((int)GPS.fix);
-        Serial.print(" quality: "); Serial.println((int)GPS.fixquality);
-        
-        if (GPS.fix) 
-        {
-            if (first_run == 0) //create header for CSV
-            {
-                dataString = "Write_Num,Date,Time,Fix,Fix_Quality,Satellites,Lat,Long,Altitude,Angle";
-                first_run = 1;
-            }
-            else
-            {
-                dataString = String(write_num) + "," + String(GPS.month) + "/" + String(GPS.day) + "/20" + String(GPS.year) + ","
-                                + String(GPS.hour) + ":" + String(GPS.minute) + ":" + String(GPS.seconds) + ","
-                                + String((int)GPS.fix) + "," + String((int)GPS.fixquality) + "," + String(GPS.satellites) + ","
-                                + String(GPS.latitude) + String(GPS.lat) + "," + String(GPS.longitude) + String(GPS.lon) + ","
-                                + String(GPS.altitude) + "," + String(GPS.angle);
-                write_num++;
-            }
-        
-            File dataFile = SD.open("datalog.txt", FILE_WRITE); //moving this into the loop that happens every 2 seconds seems to have fixed the crashing SD card problem
-        
-            if (dataFile)
-            {
-                dataFile.println(dataString);
-                dataFile.close();
-            }
-            else
-            {
-                Serial.println("Could not open data file.");  
-                sd_failures++;
-                if (sd_failures > 5) //if unable to write to SD file more than 5 times, medium flash alternating red and blue to show SD card problem
-                {
-                    while (true)
-                    {
-                        indicator.setPixelColor(0, indicator.Color(255, 0, 0));
-                        indicator.show();
-                        delay(250);
-                        indicator.setPixelColor(0, indicator.Color(0, 0, 255));
-                        indicator.show();
-                        delay(250);
-                    }
-                }
-            }
-            indicator.setPixelColor(0, green); //turn on the green indicator to show that there is a fix
-            indicator.show();
-            Serial.print("Location: ");
-            Serial.print(GPS.latitude, 4); Serial.print(GPS.lat);
-            Serial.print(", ");
-            Serial.print(GPS.longitude, 4); Serial.println(GPS.lon);
-            Serial.print("Speed (knots): "); Serial.println(GPS.speed);
-            Serial.print("Angle: "); Serial.println(GPS.angle);
-            Serial.print("Altitude: "); Serial.println(GPS.altitude);
-            Serial.print("Satellites: "); Serial.println((int)GPS.satellites);
-        }
-        else
-        {
-            indicator.setPixelColor(0, pink); //turn on pink indicator to show lost fix
-            indicator.show();
-        }
-    }
-
-    */
 
 }

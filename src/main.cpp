@@ -134,6 +134,10 @@ DateTime currentTime;       //real time according to RTC module (not GPS rtc)
 DateTime displayedTime;   //used for writing time on displaying and comparing to actual time so I can update screen in nonblocking manner
 //*/
 
+//initialize the sht30 humidity sensor
+Adafruit_SHT31 sht31 = Adafruit_SHT31();   //  Create sht31, an Adafruit_SHT31 object
+
+
 //define the builtin neopixel that I'll use as a state indicator for the system
 Adafruit_NeoPixel indicator = Adafruit_NeoPixel(1, 8, NEO_GRB + NEO_KHZ800);   
 //defining colors I'll use to indicate different system statuses
@@ -317,6 +321,7 @@ String newLogString;
 bool startNewLogFile = true;
 String logFileNameString;                   //Using string to assemble the name of the log file before converting it the char array
 char logFileNameArray[50];                  //converted char array of log file name (to be used with the SD file.open command)
+float humidityReading;                      //actual humidity reading from sensor (will be NAN when the heater is running)
 
 
 
@@ -845,6 +850,60 @@ void UIStateManager(void)
     }
 }
 
+//functions for dealing with sensor readings
+float humidity (bool initialize)
+{
+  //run the heater on startup. that's the initialize flag parameter
+  //return a humidity percentage float.
+  //if the sensor heater is running, the function returns NAN
+  static bool runningInit = false;
+  static bool enableHeater = false;                                   //Flag to indicate whether heater is on
+  const float highHumidityThreshold = 80.0;                           //If above 80% humidity, run the heater every hour to prevent condensation buildup
+  const unsigned long heaterInterval = 3600000;                       //run the heater every hour if humidity is above high threshold
+  const unsigned long heaterDuration = 20000;                         //run for 20 seconds
+  static unsigned long heaterStart;                                   //the time the heater starts running
+  static unsigned long lastHeaterRun = millis();                      //Last time the heater was run
+  float humidity;
+
+  humidity = sht31.readHumidity();
+
+  if (initialize && !runningInit) //function call told to initialize (will be called on system startup)
+  {
+    enableHeater = true;
+    runningInit = true;
+    heaterStart = millis();
+    sht31.heater(enableHeater);
+    initialize = false;
+    humidity = NAN;             //returns not-a-number while initializing
+  }
+  else if (runningInit)  
+  {
+    //still initializing
+    if (heaterStart + heaterDuration <=  millis())  //if the heating period is over
+    {
+      lastHeaterRun = millis();
+      enableHeater = false;
+      sht31.heater(enableHeater);
+      runningInit = false;
+      humidity = NAN;
+    }
+  }
+  else if ((humidity > highHumidityThreshold) && (lastHeaterRun + heaterInterval < millis()))    //if past high humidity threshold and heater hasn't been run for an hour
+  {
+    runningInit = true; //restart the init process
+  }
+  else 
+  {
+    humidity = sht31.readHumidity();
+  }
+  
+  if (runningInit) return NAN; else return humidity;
+}
+
+
+
+
+
 //Utility functions for building data strings that will be put into log files
 
 //read the GPS and return a string of appropriate data that will go into the log file
@@ -953,6 +1012,12 @@ String buildLogHeaderString(void)
     return logHeader;    
 }
 
+String buildHumidityLogString()
+{
+    humidityReading = humidity(false);
+    return String(humidityReading) + ",";
+}
+
 //function to combine all relevant log strings for writing to the log file
 String concatLogStrings(void)
 {
@@ -964,10 +1029,10 @@ String concatLogStrings(void)
     String logString = buildRTCLogString();     //put in the time stamp right away
     //if (sensors.GPS) {gpsLogString = buildGPSLogString(); logString += gpsLogString;}
     if (sensors.GPS) {buildGPSLogString(); logString += gpsLogString;}          //I think += can't use the return of a function call for appending a string? had to set global var
-    if (sensors.temp) logString += "temp test";
-    //if (sensors.barometer) logString += 
-    //if (sensors.altimeter) logString += 
-    //if (sensors.humidity) logString += 
+    if (sensors.temp) logString += "temp test,";
+    if (sensors.barometer) logString += "baro test,";
+    if (sensors.altimeter) logString += "altimeter test,";
+    if (sensors.humidity) logString += buildHumidityLogString(); 
     //if (sensors.UV) logString += 
     //if (sensors.particulate) logString += 
     //if (sensors.IMU) logString += 
@@ -978,11 +1043,17 @@ String concatLogStrings(void)
     return logString;
 }
 
+
+
+
+
+
+
 unsigned long timer = millis();   //used for timing the updates on the Serial monitor and the logfile
 unsigned long lastLogUpdate = millis();
 unsigned long lastDisplayUpdate;
 unsigned long lastRTCread = millis();   //keep track of when the RTC was last read from. Not sure if I need this yet.
-            
+
 
 
 
@@ -1098,6 +1169,18 @@ void setup()
         delay(1000);
     }
 
+    //start the humidity sensor
+    if (!sht31.begin(0x44))     //i2c interface
+    {
+        display.setCursor(10, 100);
+        display.setTextColor(BLACK);
+        display.setTextSize(3);
+        display.println("Humidity Failure");
+        display.refresh();
+    }
+    //start the initialization process for humidity sensor. Runs the heater for 20 seconds to get rid of condensation, returns NAN while heater is running
+    humidity(true);
+
     // 9600 NMEA is the default baud rate for Adafruit MTK GPS's- some use 4800
     GPS.begin(9600);
     // uncomment this line to turn on RMC (recommended minimum) and GGA (fix data) including altitude
@@ -1134,6 +1217,8 @@ void loop()
     //update rtc time 
     currentTime = rtc.now();
     
+    
+
     //static int first_run = 0;
     
     static int sd_failures = 0;
@@ -1197,10 +1282,15 @@ void loop()
     }
     //GPS.fix ? indicator.setPixelColor(0, green) : indicator.setPixelColor(0, pink);     //set the indicator to green or pink to show GPS fix acquired/lost
 
+    
+    //some functions need to be updated periodically; this will do it once per second
     if (millis() >= timer + 1000)
     {
         GPS.fix ? indicator.setPixelColor(0, green) : indicator.setPixelColor(0, pink);
         indicator.show();
+        //run the humidity function so that it can track the time that the heater has been on if it's initializing
+        //if I don't call it and never record the humidity, the heater will just stay on forever from being called in setup
+        humidity(false);
         timer = millis();
     }
 

@@ -84,6 +84,7 @@ water temp                                  https://www.dfrobot.com/product-1354
 #include <Adafruit_SharpMem.h>
 #include <OneButton.h>              //handles navigation button events
 #include <RTClib.h>
+#include <Adafruit_SHT31.h>         //humidity sensor library. not part of unified sensor or sensorlab libraries
 
 
 //SD card connections
@@ -893,9 +894,6 @@ String buildNewLogFileName(void)
     is something like yyyy-mm-dd-hh:mm:ss_recordingmode. Right now I can get away without year, so just mm-dd-hh:mm:ss_recordmode. 
     For months and hours, there are less than 26 options, so I can encode each month and hour as a single letter (A=0,B=1,C=2...).
     For days, minutes, and seconds there are too many possibilities, so I can just leave them as numbers.
-    So for today's recording on 6/23/2022 at 22:50:37 in Steady mode:
-    G23W503S.csv
-    This encodes: G=6, W=22, S @end = Steady. So 6/23 at 22:50 at 30 seconds in Steady mode
 
     How to make the code:
     For month: zero index alphabet (A=0, B=1...) and substitute that for month. So range of B to M inclusive.
@@ -908,10 +906,9 @@ String buildNewLogFileName(void)
 
     I'll be post-processing these files with Python scripts anyway, so I can first have a script go through all the files and rename them
     to their expanded forms so that they're more readable. 
-
+    Just realized that I made a compression algorithm! Super basic, but still. First time for that.
     */
-    
-    //char alphacode[27] = {"A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z"};
+
     char alphacode[27] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
     String outstring = String(alphacode[currentTime.month()]) + String(currentTime.day()) + String(alphacode[currentTime.hour()]) + String(currentTime.minute());
     int sec = currentTime.second() / 10;
@@ -920,28 +917,6 @@ String buildNewLogFileName(void)
     if (recordMode == recordingSteady) recordModeString = "S"; else recordModeString = "B";
     outstring += recordModeString + ".csv";
     return outstring;
-    
-    
-    
-    /*
-    String hour;
-    String minute;
-    String second;
-    String month;
-    String day;
-    String recordModeString;
-
-    if (currentTime.month() < 10) month = "0" + String(currentTime.month()); else month = String(currentTime.month());
-    if (currentTime.day() < 10) day = "0" + String(currentTime.day()); else day = String(currentTime.day());
-    if (currentTime.minute() < 10) minute = "0" + String(currentTime.minute()); else minute = String(currentTime.minute());
-    if (currentTime.hour() < 10) hour = "0" + String(currentTime.hour()); else hour = String(currentTime.hour());
-    if (currentTime.second() < 10) second = "0" + String(currentTime.second()); else second = String(currentTime.second());
-    if (recordMode == recordingSteady) recordModeString = "STEADY"; else recordModeString = "BURST";
-    
-    outstring = String(currentTime.year()) + "-" + month + "-" + day + "_" + recordModeString + ".csv";
-    return outstring;
-    */
-    //return logFileNameString;
     
 }
 
@@ -1138,36 +1113,6 @@ void setup()
     // Ask for firmware version
     GPSSerial.println(PMTK_Q_RELEASE);
 
-//******************************************************************************//
-/*
-I may want to change when I actually start the GPS running and wait for a fix. Specifically, may want to move this into the main loop
-and make it so that GPS start and wait for fix is triggered by enabling the GPS system in the Sensor Selection page of the UI. That means
-I need to add another state or transition to the system that makes it so that I can't start recording data until a GPS fix is established.
-I think that just means another substate system tracking GPS status and modifying interaction with the main page. I'll add that later though,
-for now just want to get a basic UI running. 
-*/
-//******************************************************************************//
-/*
-
-    // read data from the GPS to update the GPS.fix flag
-    char c = GPS.read();
-
-    //may be able to simplify this part to match what I have in the while loop below. fix later, this works for now
-    if (GPS.newNMEAreceived()) 
-    {
-        Serial.print(GPS.lastNMEA()); // this also sets the newNMEAreceived() flag to false
-        if (!GPS.parse(GPS.lastNMEA())) // this also sets the newNMEAreceived() flag to false
-            return; // we can fail to parse a sentence in which case we should just wait for another
-    }
-
-*/
-    //set indicator to yellow to show waiting for first fix
-    //indicator.setPixelColor(0, yellow);
-    //indicator.show();
-
-    //test the display functions here
-    //drawMainPage(true, false, displayButtonSelection);
-
     display.setCursor(20,20);
     display.setTextSize(3);
     display.setTextColor(BLACK);
@@ -1179,7 +1124,6 @@ for now just want to get a basic UI running.
     drawMainPage(true, true, displayButtonSelection);
     lastDisplayUpdate = millis();
 }
-
 
 
 

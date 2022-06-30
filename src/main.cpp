@@ -85,6 +85,8 @@ water temp                                  https://www.dfrobot.com/product-1354
 #include <OneButton.h>              //handles navigation button events
 #include <RTClib.h>
 #include <Adafruit_SHT31.h>         //humidity sensor library. not part of unified sensor or sensorlab libraries
+#include <Adafruit_BMP280.h>        //pressure, temp, and altimeter
+#include <Adafruit_PM25AQI.h>
 
 
 //SD card connections
@@ -105,7 +107,7 @@ water temp                                  https://www.dfrobot.com/product-1354
 #define PIN_BUTTON_UP       12
 #define PIN_BUTTON_DOWN     18     //for some reason down button stopped working on Pin 10, had to switch to an analog capable pin again
 #define PIN_BUTTON_CENTER   2
-
+#define VOLTAGE_MONITOR_PIN 20
 
 #define FORCE_GPS_FIX true  //set to true for indoor testing (skips over the part where it waits for a fix)
 #define FORCE_RECORDING_STATE_SWITCH false   //switches the currentlyRecording flag every time the lock screen is entered so I can test that
@@ -118,13 +120,18 @@ water temp                                  https://www.dfrobot.com/product-1354
 #define LOG_UPDATE_PERIOD 2000      //update period for the log file in ms (defaulted to 2000ms = 2s)
 
 //note that the TX and RX pins (0 and 1 respectively) are used for the GPS serial
-// define hardware serial port for GPS?
 #define GPSSerial Serial1
-// Connect to the GPS on the hardware port
 Adafruit_GPS GPS(&GPSSerial);
 // Set GPSECHO to 'false' to turn off echoing the GPS data to the Serial console
 // Set to 'true' if you want to debug and listen to the raw GPS sentences
 #define GPSECHO false
+
+#define SEA_LEVEL_PRESSURE 1013.25  //Standard sea level pressure in hPa/millibar. Used for calculating altitude by pressure.
+                                    //Eventually I want to calibrate this by reading GPS altitude first, but need to learn more about GPS altitude readings first
+
+#define PARTICULATE_SLEEP_PIN   10
+#define UV_PIN                  17
+
 
 ///*
 //create an instance of the RTC (sd featherwing) and build a char array for the days of the week
@@ -137,6 +144,11 @@ DateTime displayedTime;   //used for writing time on displaying and comparing to
 //initialize the sht30 humidity sensor
 Adafruit_SHT31 sht31 = Adafruit_SHT31();   //  Create sht31, an Adafruit_SHT31 object
 
+//initialize the bmp280 barometer
+Adafruit_BMP280 bmp280;
+
+//initialize the particulate matter sensor object
+Adafruit_PM25AQI aqi = Adafruit_PM25AQI();
 
 //define the builtin neopixel that I'll use as a state indicator for the system
 Adafruit_NeoPixel indicator = Adafruit_NeoPixel(1, 8, NEO_GRB + NEO_KHZ800);   
@@ -154,6 +166,33 @@ Adafruit_SharpMem display(DISPLAY_CLK, DISPLAY_DI, DISPLAY_CS, 400, 240);
 //creating utility functions
 float metersToFeet(float meters) {return meters*3.28084;}
 float celsiusToFahrenheit(float celsius) {return celsius*9/5 + 32;}
+
+float getBatteryVoltage(void)
+{
+    analogReference(AR_INTERNAL_3_0);
+    analogReadResolution(12); // Can be 8, 10, 12 or 14
+    delay(1);   //to let the ADC settle, may remove if it causes problems with GPS and similar
+    static const float mVPerLSB = 3000.0 / 4096.0;
+    float raw = analogRead(VOLTAGE_MONITOR_PIN);
+    analogReference(AR_DEFAULT);
+    analogReadResolution(10);
+    return raw * 2.0 * mVPerLSB;
+}
+
+int batteryVoltsToPercent(float mv)
+{
+    if(mv < 3300) return 0;
+    if(mv < 3600) {mv -= 3300; return mv/30;}
+    mv -= 3600;
+    return 10 + (mv * 0.15F );  // thats mvolts /6.66666666
+}
+
+String getUVIndex()
+{
+   static const float mVPerLSB = 3600.0/1024.0;
+   float raw = analogRead(UV_PIN);
+   return String(mVPerLSB * raw / 100.0) + ",";     //converts ADC reading to Volts and multiplies by 10 to get UV Index
+}
 
 //define display graphic primitive constants
 const int roundRectCornerRad = 4;
@@ -327,6 +366,9 @@ float humidityReading;                      //actual humidity reading from senso
 
 void drawDateTimeUIElement(int x, int y)
 {
+    float mv = getBatteryVoltage();         //battery millivolts
+    float v = mv / 1000.0;
+    int p = batteryVoltsToPercent(mv);      //battery percent
     display.setCursor(x, y);
     display.setTextSize(2);
     display.setTextColor(BLACK);
@@ -340,6 +382,12 @@ void drawDateTimeUIElement(int x, int y)
     display.print(displayedTime.month());
     display.print("/");
     display.println(displayedTime.day());
+    display.setCursor(x, y+40);
+    //display.print("Bat: ");
+    display.print(v, 2);
+    display.print("mV, ");
+    display.print(p);
+    display.println("%");
 }
 
 displayButtons drawSensorSetupButtons(displayButtons selected)
@@ -969,7 +1017,8 @@ String buildNewLogFileName(void)
     */
 
     char alphacode[27] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-    String outstring = String(alphacode[currentTime.month()]) + String(currentTime.day()) + String(alphacode[currentTime.hour()]) + String(currentTime.minute());
+    String outstring = String(alphacode[currentTime.month()]) + String(currentTime.day()) + String(alphacode[currentTime.hour()]);
+    if (currentTime.minute() < 10) outstring += "0" + String(currentTime.minute()); else outstring += String(currentTime.minute()); 
     int sec = currentTime.second() / 10;
     outstring += String(sec);
     String recordModeString;
@@ -991,7 +1040,7 @@ String buildLogHeaderString(void)
     String altString = "Barometric Altitude (m),";
     String humidityString = "Humidity,";
     String uvString = "UV Index,";
-    String partString = "PM1.0,PM2.5,PM10.0,";       //air quality
+    String partString = "PM1.0 Standard,PM2.5 Standard,PM10.0 Standard,";       //air quality
     String imuString = "Roll,Pitch,";                //I think this is all I'll want for measuring angle of repose
     String tdsString = "TDS,";
     String turbString = "Turbidity,";
@@ -1018,6 +1067,26 @@ String buildHumidityLogString()
     return String(humidityReading) + ",";
 }
 
+String buildTempLogString()
+{
+    return String(bmp280.readTemperature()) + ",";      //returns in deg C
+}
+
+String buildParticulateLogString()
+{
+    PM25_AQI_Data data;
+    String logOut = "";
+    if (aqi.read(&data))
+    {
+        logOut += String(data.pm10_standard) + "," + String(data.pm25_standard) + "," + String(data.pm100_standard) + ",";
+        return logOut;
+    }
+    else
+    {
+        return "-,-,-,";
+    }
+}
+
 //function to combine all relevant log strings for writing to the log file
 String concatLogStrings(void)
 {
@@ -1027,14 +1096,13 @@ String concatLogStrings(void)
     //RTC,GPS,Temperature,Barometer,Altimeter,Humidity,UV,Particulate,IMU,TDS,Turbidity,WaterTemp
 
     String logString = buildRTCLogString();     //put in the time stamp right away
-    //if (sensors.GPS) {gpsLogString = buildGPSLogString(); logString += gpsLogString;}
     if (sensors.GPS) {buildGPSLogString(); logString += gpsLogString;}          //I think += can't use the return of a function call for appending a string? had to set global var
-    if (sensors.temp) logString += "temp test,";
-    if (sensors.barometer) logString += "baro test,";
-    if (sensors.altimeter) logString += "altimeter test,";
+    if (sensors.temp) logString += String(bmp280.readTemperature()) + ",";      //For now, don't think I need separate function calls to build these strings
+    if (sensors.barometer) logString += String(bmp280.readPressure()) + ",";    //If I want to add extra functionality, I can add a function for this later.
+    if (sensors.altimeter) logString += String(bmp280.readAltitude(SEA_LEVEL_PRESSURE)) + ",";      //eventually want to have pressure calibrated by GPS altitude
     if (sensors.humidity) logString += buildHumidityLogString(); 
-    //if (sensors.UV) logString += 
-    //if (sensors.particulate) logString += 
+    if (sensors.UV) logString += getUVIndex();
+    if (sensors.particulate) logString += buildParticulateLogString();
     //if (sensors.IMU) logString += 
     //if (sensors.TDS) logString += 
     //if (sensors.turbidity) logString += 
@@ -1063,6 +1131,10 @@ unsigned long lastRTCread = millis();   //keep track of when the RTC was last re
 
 void setup()
 {
+    //pinMode(PARTICULATE_SLEEP_PIN, OUTPUT);
+    //digitalWrite(PARTICULATE_SLEEP_PIN, HIGH);       //put the particulate matter sensor is sleep mode for testing for now
+    
+    
     //attach the proper functions to the navigation buttons
     buttonLeft.attachClick([]() {navigationButton = leftSingleClick;});      //Lambda function! 
     buttonCenter.attachClick([]() {navigationButton = centerSingleClick;});
@@ -1128,6 +1200,16 @@ void setup()
     //while (!Serial);  // uncomment to have the sketch wait until Serial is ready. comment out if using away from computer
     Serial.begin(115200);
     Serial.println("Adafruit GPS library basic parsing test!");
+
+    //initialize the air quality sensor so it can start booting as soon as possible
+    if (! aqi.begin_I2C()) 
+    {
+        Serial.println("Could not find PM 2.5 sensor!");
+        indicator.setPixelColor(0, blue);               //blue on indicator shows that the AQI sensor isn't available
+        indicator.show();
+        delay(2000);
+    }
+
     
     //start the display
     display.begin();
@@ -1177,33 +1259,47 @@ void setup()
         display.setTextSize(3);
         display.println("Humidity Failure");
         display.refresh();
+        delay(1000);
     }
     //start the initialization process for humidity sensor. Runs the heater for 20 seconds to get rid of condensation, returns NAN while heater is running
     humidity(true);
 
-    // 9600 NMEA is the default baud rate for Adafruit MTK GPS's- some use 4800
-    GPS.begin(9600);
-    // uncomment this line to turn on RMC (recommended minimum) and GGA (fix data) including altitude
-    GPS.sendCommand(PMTK_SET_NMEA_OUTPUT_RMCGGA);
-    // Set the update rate (1hz recommended)
-    GPS.sendCommand(PMTK_SET_NMEA_UPDATE_1HZ); // 1 Hz update rate
+    //start the BMP280
+    unsigned bmpStatus = bmp280.begin();
+    if (! bmpStatus)
+    {
+        display.setCursor(10, 100);
+        display.setTextColor(BLACK);
+        display.setTextSize(3);
+        display.println("Barometer Failure");
+        display.refresh();
+        delay(1000);
+    }
+    bmp280.setSampling(Adafruit_BMP280::MODE_NORMAL,     /* Operating Mode. */
+                    Adafruit_BMP280::SAMPLING_X2,     /* Temp. oversampling */
+                    Adafruit_BMP280::SAMPLING_X16,    /* Pressure oversampling */
+                    Adafruit_BMP280::FILTER_X16,      /* Filtering. */
+                    Adafruit_BMP280::STANDBY_MS_500); /* Standby time. */
 
-    // Request updates on antenna status, comment out to keep quiet
-    GPS.sendCommand(PGCMD_ANTENNA);
 
-    delay(1000);
+    
+    //Start the GPS
+    GPS.begin(9600);                                // 9600 NMEA is the default baud rate for Adafruit MTK GPS's- some use 4800
+    GPS.sendCommand(PMTK_SET_NMEA_OUTPUT_RMCGGA);   // uncomment this line to turn on RMC (recommended minimum) and GGA (fix data) including altitude
+    GPS.sendCommand(PMTK_SET_NMEA_UPDATE_1HZ);      // 1 Hz update rate recommended
+    GPS.sendCommand(PGCMD_ANTENNA);                 // Request updates on antenna status, comment out to keep quiet
+    //delay(1000);
+    //GPSSerial.println(PMTK_Q_RELEASE);              // Ask for firmware version
 
-    // Ask for firmware version
-    GPSSerial.println(PMTK_Q_RELEASE);
 
+
+    //Everything is set up!
     display.setCursor(20,20);
     display.setTextSize(3);
     display.setTextColor(BLACK);
     display.println("Initialized.");
     display.refresh();
-
     delay(1000);
-    
     drawMainPage(true, true, displayButtonSelection);
     lastDisplayUpdate = millis();
 }

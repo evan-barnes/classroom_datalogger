@@ -87,6 +87,9 @@ water temp                                  https://www.dfrobot.com/product-1354
 #include <Adafruit_SHT31.h>         //humidity sensor library. not part of unified sensor or sensorlab libraries
 #include <Adafruit_BMP280.h>        //pressure, temp, and altimeter
 #include <Adafruit_PM25AQI.h>
+#include <Adafruit_TinyUSB.h>
+#include <OneWire.h>
+#include <DallasTemperature.h>
 
 
 //SD card connections
@@ -98,6 +101,10 @@ water temp                                  https://www.dfrobot.com/product-1354
 #define DISPLAY_CLK 5
 #define DISPLAY_DI 6
 #define DISPLAY_CS 9
+//Water sensor connections
+#define WATER_TEMP_PIN 14
+#define WATER_TURBIDITY_PIN 15
+#define WATER_TDS_PIN 16
 //black and white definitions for display
 #define BLACK 0
 #define WHITE 1
@@ -150,6 +157,11 @@ Adafruit_BMP280 bmp280;
 //initialize the particulate matter sensor object
 Adafruit_PM25AQI aqi = Adafruit_PM25AQI();
 
+//initialize the water sensor objects
+OneWire waterTempSensorOneWire(WATER_TEMP_PIN);
+DallasTemperature waterTempSensor(&waterTempSensorOneWire);     //waterTempSensor is the actual object I'll query
+
+
 //define the builtin neopixel that I'll use as a state indicator for the system
 Adafruit_NeoPixel indicator = Adafruit_NeoPixel(1, 8, NEO_GRB + NEO_KHZ800);   
 //defining colors I'll use to indicate different system statuses
@@ -193,6 +205,16 @@ String getUVIndex()
    float raw = analogRead(UV_PIN);
    return String(mVPerLSB * raw / 100.0) + ",";     //converts ADC reading to Volts and multiplies by 10 to get UV Index
 }
+
+float getWaterTemp()
+{
+    waterTempSensor.requestTemperatures();
+    float tempC = waterTempSensor.getTempCByIndex(0);
+    if (tempC != DEVICE_DISCONNECTED_C) return tempC;
+    else return NAN;
+}
+
+
 
 //define display graphic primitive constants
 const int roundRectCornerRad = 4;
@@ -295,7 +317,28 @@ sensorEnableFlags sensors =
 };
 
 
+float getWaterTDS()
+{
+    static float averageVoltage = 0;
+    float tdsValue;
+    float compensationCoefficient;
+    averageVoltage = (.9*averageVoltage + .1*analogRead(WATER_TDS_PIN)) * 3.6 / 1024;
+    
+    //note that for temperature compensation to really work, the temp probe also must be used
+    if (sensors.waterTemp)
+    {
+        float temp = getWaterTemp();
+        compensationCoefficient=1.0+0.02*(temp - 25);
+    }
+    else
+    {
+        compensationCoefficient=1.0;  //no temp probe, so defaulting to standard ref temp of 25C
+    }
+    float compensationVoltage = averageVoltage / compensationCoefficient;
+    tdsValue = (133.42*compensationVoltage*compensationVoltage*compensationVoltage - 255.86*compensationVoltage*compensationVoltage + 857.39*compensationVoltage)*0.5;
 
+    return tdsValue;
+}
 
 
 
@@ -1014,6 +1057,14 @@ String buildNewLogFileName(void)
     I'll be post-processing these files with Python scripts anyway, so I can first have a script go through all the files and rename them
     to their expanded forms so that they're more readable. 
     Just realized that I made a compression algorithm! Super basic, but still. First time for that.
+
+    Also just realized that if I'm going to be post-processing filenames in Python anyway, I could just number these recordings chronologically (e.g., first file
+    on the SD card is 00000000.csv, second is 00000001.csv, etc.), and then add an extra header to the top of file that has all the timestamp info I want to have
+    in the filename. If I'm renaming the file in python, I can also just edit the file to remove that block after using it to create a new name for the file. This does require that
+    when I start the datalogger, it looks through all the files to find the largest last numbered file so it can create an appropriate new one, which I'm not sure
+    how to do yet.
+
+    OR I  can switch to the SDFat library instead and use long file names.
     */
 
     char alphacode[27] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
@@ -1042,7 +1093,7 @@ String buildLogHeaderString(void)
     String uvString = "UV Index,";
     String partString = "PM1.0 Standard,PM2.5 Standard,PM10.0 Standard,";       //air quality
     String imuString = "Roll,Pitch,";                //I think this is all I'll want for measuring angle of repose
-    String tdsString = "TDS,";
+    String tdsString = "TDS (ppm),";
     String turbString = "Turbidity,";
     String waterTempString = "Water Temp (C),";
     
@@ -1087,6 +1138,20 @@ String buildParticulateLogString()
     }
 }
 
+String buildWaterTempLogString()
+{
+    String tempLog = String(getWaterTemp());
+    tempLog += ",";
+    return tempLog;
+}
+
+String buildWaterTDSLogString()
+{
+    String tds = String(getWaterTDS());
+    tds += ",";
+    return tds;
+}
+
 //function to combine all relevant log strings for writing to the log file
 String concatLogStrings(void)
 {
@@ -1104,9 +1169,9 @@ String concatLogStrings(void)
     if (sensors.UV) logString += getUVIndex();
     if (sensors.particulate) logString += buildParticulateLogString();
     //if (sensors.IMU) logString += 
-    //if (sensors.TDS) logString += 
+    if (sensors.TDS) logString += buildWaterTDSLogString();
     //if (sensors.turbidity) logString += 
-    //if (sensors.waterTemp) logString += 
+    if (sensors.waterTemp) logString += buildWaterTempLogString();
 
     return logString;
 }
@@ -1134,6 +1199,9 @@ void setup()
     //pinMode(PARTICULATE_SLEEP_PIN, OUTPUT);
     //digitalWrite(PARTICULATE_SLEEP_PIN, HIGH);       //put the particulate matter sensor is sleep mode for testing for now
     
+    //set up the water sensors
+    waterTempSensor.begin();
+    pinMode(WATER_TDS_PIN, INPUT);
     
     //attach the proper functions to the navigation buttons
     buttonLeft.attachClick([]() {navigationButton = leftSingleClick;});      //Lambda function! 

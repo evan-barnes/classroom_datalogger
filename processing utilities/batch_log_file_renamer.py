@@ -7,9 +7,10 @@ months = {1: "January", 2:"February",3:"March",4:"April",5:"May",6:"June",
           7:"July",8:"August",9:"September",10:"October",11:"November",12:"December"}
 
 def decode_name(input_name):
-    name_correct_format = re.search("^[A-Z]{1}[0-9]{2}[A-Z]{1}[0-9]{3}[BS]{1}\.csv$", input_name)
+    name_correct_format = re.search(r"^[A-Z]{1}[0-9]{2}[A-Z]{1}[0-9]{3}[BS]{1}.CSV$", input_name)
     if not name_correct_format:
-        #print(input_name)
+        print(input_name)
+        print("incorrect format for renaming\n")
         return False
     
     year = "2022"
@@ -40,18 +41,18 @@ def decode_name(input_name):
 
 #C:\Users\Evan\Desktop\renaming test
 directory = input("Directory: ")
-#directory = r"C:\Users\Evan\Desktop\renaming test"
+#directory = r"E:\test"
 #print(directory)
 os.chdir(directory)
-#print("\nAll directory contents: ")
-#print(os.listdir())
+print("\nAll directory contents: ")
+print(os.listdir())
 
 files_list = []
 for item in os.listdir():
     if os.path.isfile(os.path.join(directory, item)):
         files_list.append(item)
-#print("\nFiles only")
-#print(files_list)
+print("\nFiles only")
+print(files_list)
 
 for file in files_list:
     decoded = decode_name(file)
@@ -61,6 +62,7 @@ for file in files_list:
         else:
             if remove_duplicates:
                 os.remove(file)
+        #os.rename(file, decode_name(file))
         
 print("\nRenamed contents:\n")
 for i in os.listdir():
